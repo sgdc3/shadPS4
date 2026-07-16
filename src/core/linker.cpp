@@ -465,17 +465,31 @@ bool Linker::Resolve(const std::string& name, Loader::SymbolType sym_type, Modul
 }
 
 void* Linker::TlsGetAddr(u64 module_index, u64 offset) {
+    // Fast path with no lock: the DTV is per thread and only grows under the lock below, so
+    // when it is current for the loaded-module generation and the block exists, the read is
+    // safe. A concurrent module load bumps the generation first and takes the slow path.
+    {
+        DtvEntry* dtv_table = GetTcbBase()->tcb_dtv;
+        if (dtv_table[0].counter == dtv_generation_counter.load(std::memory_order_acquire)) {
+            u8* addr = dtv_table[module_index + 1].pointer;
+            if (addr) {
+                return addr + offset;
+            }
+        }
+    }
+
+    // Slow path: grow the DTV or allocate the block, both under the lock.
     std::scoped_lock lk{mutex};
 
     DtvEntry* dtv_table = GetTcbBase()->tcb_dtv;
-    if (dtv_table[0].counter != dtv_generation_counter) {
+    if (dtv_table[0].counter != dtv_generation_counter.load(std::memory_order_acquire)) {
         // Generation counter changed, a dynamic module was either loaded or unloaded.
         const u32 old_num_dtvs = dtv_table[1].counter;
         ASSERT_MSG(max_tls_index > old_num_dtvs, "Module unloading unsupported");
         // Module was loaded, increase DTV table size.
         DtvEntry* new_dtv_table = new DtvEntry[max_tls_index + 2]{};
         std::memcpy(new_dtv_table + 2, dtv_table + 2, old_num_dtvs * sizeof(DtvEntry));
-        new_dtv_table[0].counter = dtv_generation_counter;
+        new_dtv_table[0].counter = dtv_generation_counter.load(std::memory_order_relaxed);
         new_dtv_table[1].counter = max_tls_index;
         delete[] dtv_table;
 
