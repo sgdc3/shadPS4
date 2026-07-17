@@ -135,15 +135,13 @@ void Setup(std::string_view shadps4_filename) {
     g_console_sink = UpdateColorLevels(std::make_shared<spdlog_stdout>(spdlog::color_mode::always));
 #endif
 
-    g_console_sink->set_pattern("%^%v%$");
-
     // Setup file
 
     g_shad_file_sink = std::make_shared<LogFileSink>(
         (GetUserPath(Common::FS::PathType::LogDir) / shadps4_filename).string(), false,
         EmulatorSettings.GetLogSizeLimit());
-    g_shad_file_sink->set_pattern("%^%v%$");
 
+    UpdateLogTimestamps(EmulatorSettings.IsLogTimestamps());
     UpdateSinks();
 }
 
@@ -151,6 +149,7 @@ void Switch(std::string_view game_filename, bool append_log) {
     UpdateSinks();
     UpdateLogLevels(EmulatorSettings.GetLogFilter());
     UpdateLogFlushLevel(EmulatorSettings.GetLogFlushLevel());
+    UpdateLogTimestamps(EmulatorSettings.IsLogTimestamps());
 
     g_shad_file_sink->_size_limit = EmulatorSettings.GetLogSizeLimit();
     g_shad_file_sink->session_file_helper_.open(
@@ -241,6 +240,17 @@ void UpdateLogFlushLevel(std::string_view log_flush_level) {
         for (auto& logger : ALL_LOGGERS) {
             logger->flush_on(spdlog::level_from_str(log_flush_level.data()));
         }
+    }
+}
+
+void UpdateLogTimestamps(bool timestamps) {
+    // Optional wall-clock prefix; off by default so the format existing parsers see is unchanged.
+    const char* pattern = timestamps ? "%^[%H:%M:%S.%e] %v%$" : "%^%v%$";
+    if (g_console_sink) {
+        g_console_sink->set_pattern(pattern);
+    }
+    if (g_shad_file_sink) {
+        g_shad_file_sink->set_pattern(pattern);
     }
 }
 
