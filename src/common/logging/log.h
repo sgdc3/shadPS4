@@ -30,6 +30,7 @@ void Terminate();
 void UpdateSinks();
 void UpdateLogLevels(std::string_view log_filter);
 void UpdateLogFlushLevel(std::string_view log_flush_level);
+void UpdateLogTimestamps(bool timestamps);
 
 [[nodiscard]] inline bool ShouldLog(Class log_class, Level level) {
     return level >= g_class_levels[static_cast<std::size_t>(log_class)];
