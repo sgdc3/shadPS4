@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -174,6 +175,9 @@ public:
     /// Reuploads image contents.
     void RefreshImage(Image& image);
 
+    /// Returns true if the image's CPU refresh is held until the next frame.
+    [[nodiscard]] bool IsRefreshDeferred(const Image& image) const;
+
     /// Retrieves the sampler that matches the provided S# descriptor.
     [[nodiscard]] vk::Sampler GetSampler(const AmdGpu::Sampler& sampler,
                                          AmdGpu::BorderColorBuffer border_color_base,
@@ -283,6 +287,11 @@ public:
 
     /// Runs the garbage collector.
     void RunGarbageCollector();
+
+    /// Advances the frame epoch on a guest flip.
+    void OnGuestFlip() {
+        frame_epoch.fetch_add(1, std::memory_order_relaxed);
+    }
 
     template <typename Func>
     void ForEachImageInRegion(VAddr cpu_addr, size_t size, Func&& func) {
@@ -421,9 +430,12 @@ private:
     u64 pressure_gc_samplers = 0;
     u64 critical_gc_samplers = 0;
     u64 gc_tick = 0;
+    // Bumped on the command-processor thread, read from the presenter too.
+    std::atomic<u64> frame_epoch = 1;
     Common::LRUCache<Image> image_lru_cache;
     Common::LRUCache<Sampler> sampler_lru_cache;
     const bool readback_linear_images;
+    const bool defer_rt_refresh;
     std::mutex download_images_mutex;
     absl::flat_hash_map<VAddr, MetaDataInfo> surface_metas;
 };

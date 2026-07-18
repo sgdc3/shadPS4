@@ -57,7 +57,8 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
       slot_image_views{MAX_IMAGE_VIEWS}, slot_samplers{MAX_SAMPLERS},
       blit_helper{instance, scheduler},
       tile_manager{instance, scheduler, runtime, buffer_cache.GetStreamBuffer()},
-      readback_linear_images{EmulatorSettings.IsReadbackLinearImagesEnabled()} {
+      readback_linear_images{EmulatorSettings.IsReadbackLinearImagesEnabled()},
+      defer_rt_refresh{EmulatorSettings.IsDeferRtRefreshEnabled()} {
 
     u32 max_samplers = instance.GetMaxSamplerAllocationCount();
     trigger_gc_samplers = max_samplers * 3 / 4;
@@ -571,7 +572,8 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     // Only carry over the old contents when they hold GPU-written data that guest memory lacks.
     // A CPU-dirty source is stale (e.g. a streamed texture rewritten in a reused pool slot);
     // copying it would overwrite the fresh upload with old data.
-    const bool src_has_gpu_data = src_image.HasGpuValidData();
+    // A source whose refresh is deferred is CPU-dirty but still holds this frame's GPU data.
+    const bool src_has_gpu_data = src_image.HasGpuValidData() || IsRefreshDeferred(src_image);
 
     RefreshImage(new_image);
 
@@ -583,6 +585,7 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     new_image.flags &= ~ImageFlagBits::Dirty;
     if (src_has_gpu_data) {
         runtime.CopyImage(&src_image, &new_image);
+        new_image.last_gpu_write_epoch = src_image.last_gpu_write_epoch;
     }
     FreeImage(image_id);
 
@@ -714,7 +717,13 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc) {
             download_images.emplace(image_id);
         }
     }
+    const bool gpu_written = desc.type == BindingType::Storage;
     UpdateImage(image_id);
+    // Stamp after the refresh: RefreshImage skips an image already stamped for this frame,
+    // and the next frame's first use must still refresh.
+    if (gpu_written) {
+        image.last_gpu_write_epoch = frame_epoch.load(std::memory_order_relaxed);
+    }
     return image.FindView(desc.view_info);
 }
 
@@ -752,6 +761,9 @@ ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& des
     }
     image.usage.render_target = 1u;
     UpdateImage(image_id);
+    // Stamp after the refresh: RefreshImage skips an image already stamped for this frame,
+    // and the next frame's first use must still refresh.
+    image.last_gpu_write_epoch = frame_epoch.load(std::memory_order_relaxed);
 
     // Register meta data for this color buffer
     const VAddr cmask_addr = desc.info.meta_info.cmask_addr;
@@ -790,6 +802,9 @@ ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc
     image.flags |= ImageFlagBits::GpuModified;
     image.usage.depth_target = 1u;
     UpdateImage(image_id);
+    // Stamp after the refresh: RefreshImage skips an image already stamped for this frame,
+    // and the next frame's first use must still refresh.
+    image.last_gpu_write_epoch = frame_epoch.load(std::memory_order_relaxed);
 
     // Register meta data for this depth buffer
     const VAddr htile_addr = desc.info.meta_info.htile_addr;
@@ -840,8 +855,23 @@ void TextureCache::AssociateStencil(ImageId depth_id, const ImageInfo& depth_inf
     stencil_image.AssociateDepth(depth_id, slot_images[depth_id].image_uid);
 }
 
+bool TextureCache::IsRefreshDeferred(const Image& image) const {
+    const u64 epoch = frame_epoch.load(std::memory_order_relaxed);
+    return defer_rt_refresh && epoch > 1 && True(image.flags & ImageFlagBits::GpuModified) &&
+           image.last_gpu_write_epoch == epoch;
+}
+
 void TextureCache::RefreshImage(Image& image) {
     if (False(image.flags & ImageFlagBits::Dirty) || image.info.num_samples > 1) {
+        return;
+    }
+
+    // A pipelined title may CPU-initialize a render target for the next frame while this batch
+    // still draws into and samples it. Applying that write now would clobber the rendered
+    // content, so keep the dirty flags (CpuDirty, or GpuDirty via an aliasing buffer) and refresh
+    // at the first use of the next frame. frame_epoch only advances on flips patched into the
+    // command stream; titles that flip from the CPU never pass the epoch > 1 check.
+    if (IsRefreshDeferred(image)) {
         return;
     }
 
