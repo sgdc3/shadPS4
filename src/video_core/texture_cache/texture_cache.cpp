@@ -34,7 +34,8 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
       slot_image_views{MAX_IMAGE_VIEWS}, slot_samplers{MAX_SAMPLERS},
       blit_helper{instance, scheduler},
       tile_manager{instance, scheduler, runtime, buffer_cache.GetStreamBuffer()},
-      readback_linear_images{EmulatorSettings.IsReadbackLinearImagesEnabled()} {
+      readback_linear_images{EmulatorSettings.IsReadbackLinearImagesEnabled()},
+      defer_rt_refresh{EmulatorSettings.IsDeferRtRefreshEnabled()} {
 
     u32 max_samplers = instance.GetMaxSamplerAllocationCount();
     trigger_gc_samplers = max_samplers * 3 / 4;
@@ -635,7 +636,13 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc) {
             download_images.emplace(image_id);
         }
     }
+    const bool gpu_written = desc.type == BindingType::Storage;
     UpdateImage(image_id);
+    // Stamp after the refresh: RefreshImage skips an image already stamped for this frame,
+    // and the next frame's first use must still refresh.
+    if (gpu_written) {
+        image.last_gpu_write_epoch = frame_epoch.load(std::memory_order_relaxed);
+    }
     return image.FindView(desc.view_info);
 }
 
@@ -648,6 +655,9 @@ ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& des
     }
     image.usage.render_target = 1u;
     UpdateImage(image_id);
+    // Stamp after the refresh: RefreshImage skips an image already stamped for this frame,
+    // and the next frame's first use must still refresh.
+    image.last_gpu_write_epoch = frame_epoch.load(std::memory_order_relaxed);
 
     // Register meta data for this color buffer
     if (desc.info.meta_info.cmask_addr) {
@@ -670,6 +680,9 @@ ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc
     image.flags |= ImageFlagBits::GpuModified;
     image.usage.depth_target = 1u;
     UpdateImage(image_id);
+    // Stamp after the refresh: RefreshImage skips an image already stamped for this frame,
+    // and the next frame's first use must still refresh.
+    image.last_gpu_write_epoch = frame_epoch.load(std::memory_order_relaxed);
 
     // Register meta data for this depth buffer
     if (desc.info.meta_info.htile_addr) {
@@ -714,6 +727,17 @@ void TextureCache::AssociateStencil(ImageId depth_id, const ImageInfo& depth_inf
 
 void TextureCache::RefreshImage(Image& image) {
     if (False(image.flags & ImageFlagBits::Dirty) || image.info.num_samples > 1) {
+        return;
+    }
+
+    // A pipelined title may CPU-initialize a render target for the next frame while this batch
+    // still draws into and samples it. Applying that write now would clobber the rendered
+    // content, so keep the dirty flags (CpuDirty, or GpuDirty via an aliasing buffer) and refresh
+    // at the first use of the next frame. frame_epoch only advances on flips patched into the
+    // command stream; titles that flip from the CPU never pass the epoch > 1 check.
+    const u64 epoch = frame_epoch.load(std::memory_order_relaxed);
+    if (defer_rt_refresh && epoch > 1 && True(image.flags & ImageFlagBits::GpuModified) &&
+        image.last_gpu_write_epoch == epoch) {
         return;
     }
 
