@@ -123,6 +123,18 @@ struct Image {
         depth_uid = {};
     }
 
+    void AssociateStencilCopy(ImageId copy_image_id, u64 copy_image_uid) {
+        stencil_copy_id = copy_image_id;
+        stencil_copy_uid = copy_image_uid;
+        // Different from ds_write_stamp so the first use records a copy.
+        stencil_copy_stamp = ds_write_stamp + 1;
+    }
+
+    void DisassociateStencilCopy() {
+        stencil_copy_id = {};
+        stencil_copy_uid = {};
+    }
+
     ImageView& FindView(const ImageViewInfo& view_info, bool ensure_guest_samples = true);
 
     using Barriers = boost::container::small_vector<vk::ImageMemoryBarrier2, 32>;
@@ -141,6 +153,12 @@ public:
     VAddr track_addr_end = 0;
     ImageId depth_id{};
     u64 depth_uid{};
+    // Staged color copy of the stencil aspect, for reads through a color format.
+    ImageId stencil_copy_id{};
+    u64 stencil_copy_uid{};
+    u64 stencil_copy_stamp{};
+    // Bumped when the depth/stencil contents may have changed; the staged copy refreshes on it.
+    u64 ds_write_stamp{};
 
     vk::ImageUsageFlags usage_flags;
     vk::FormatFeatureFlags2 format_features;

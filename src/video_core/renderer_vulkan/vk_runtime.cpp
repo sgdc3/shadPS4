@@ -517,6 +517,19 @@ void Runtime::CopyDepthStencil(VideoCore::Image* src, VideoCore::Image* dst,
     dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
 }
 
+void Runtime::CopyStencilToColor(VideoCore::Image* src, VideoCore::Image* dst, u32 pack) {
+    bool needs_flush =
+        Transit(src, vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+                vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
+    needs_flush |= Transit(dst, vk::ImageLayout::eColorAttachmentOptimal,
+                           vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                           vk::AccessFlagBits2::eColorAttachmentWrite);
+    if (needs_flush) {
+        FlushBarriers();
+    }
+    blit_helper->CopyStencilToColor(*src, *dst, pack);
+}
+
 void Runtime::ResolveImage(VideoCore::Image* src, VideoCore::Image* dst,
                            const VideoCore::SubresourceRange& src_range,
                            const VideoCore::SubresourceRange& dst_range) {
