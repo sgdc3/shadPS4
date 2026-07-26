@@ -1196,6 +1196,50 @@ s32 PS4_SYSV_ABI sceNpUnregisterPlusEventCallback() {
     return ORBIS_OK;
 }
 
+// A bandwidth test measures against a real online service and nothing backs one here. The
+// auto-stub answered OK with no status, which a title reads as a test still running, so it
+// polls GetStatus forever. A signed-out console fails the call, so do the same without a user.
+// The parameters are left undeclared: nothing here interprets them.
+s32 PS4_SYSV_ABI sceNpBandwidthTestInitStart() {
+    if (!g_shadnet_enabled || !Libraries::Np::NpHandler::GetInstance().IsAnySignedIn()) {
+        LOG_DEBUG(Lib_NpManager, "signed out");
+        return ORBIS_NP_ERROR_SIGNED_OUT;
+    }
+    LOG_ERROR(Lib_NpManager, "(STUBBED) called");
+    return ORBIS_OK;
+}
+
+// Signed in, a title polls GetStatus until it reports 2 (finished) and reads the result from
+// Shutdown. Nothing measures a real link, so report an instantly finished test with a nominal
+// bandwidth. Signatures recovered from call sites; the result layout is {up, down, result, pad}.
+struct OrbisNpBandwidthTestResult {
+    double upload_bps;
+    double download_bps;
+    s32 result;
+    s32 padding;
+};
+
+s32 PS4_SYSV_ABI sceNpBandwidthTestGetStatus(s32 /*id*/, s32* status) {
+    if (!g_shadnet_enabled || !Libraries::Np::NpHandler::GetInstance().IsAnySignedIn()) {
+        return ORBIS_NP_ERROR_SIGNED_OUT;
+    }
+    if (status == nullptr) {
+        return ORBIS_NP_ERROR_INVALID_ARGUMENT;
+    }
+    *status = 2; // SCE_NP_BANDWIDTH_TEST_STATUS_FINISHED
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceNpBandwidthTestShutdown(s32 /*id*/, OrbisNpBandwidthTestResult* result) {
+    if (result != nullptr) {
+        result->upload_bps = 10000000.0;
+        result->download_bps = 10000000.0;
+        result->result = 0;
+        result->padding = 0;
+    }
+    return ORBIS_OK;
+}
+
 void RegisterNpCallback(std::string key, std::function<void()> cb) {
     std::scoped_lock lk{g_np_callbacks_mutex};
     LOG_DEBUG(Lib_NpManager, "registering callback processing for {}", key);
@@ -1222,6 +1266,14 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
         },
         nullptr);
     Libraries::Np::NpHandler::GetInstance().Initialize();
+
+    // See the comment above sceNpBandwidthTestInitStart.
+    LIB_FUNCTION("jktww3yJXnc", "libSceNpUtility", 1, "libSceNpUtility",
+                 sceNpBandwidthTestInitStart);
+    LIB_FUNCTION("BYIZGKm6bO4", "libSceNpUtility", 1, "libSceNpUtility",
+                 sceNpBandwidthTestGetStatus);
+    LIB_FUNCTION("pLr1fEQS1z8", "libSceNpUtility", 1, "libSceNpUtility",
+                 sceNpBandwidthTestShutdown);
 
     LIB_FUNCTION("GpLQDNKICac", "libSceNpManager", 1, "libSceNpManager", sceNpCreateRequest);
     LIB_FUNCTION("eiqMCt9UshI", "libSceNpManager", 1, "libSceNpManager", sceNpCreateAsyncRequest);
