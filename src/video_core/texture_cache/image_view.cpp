@@ -118,9 +118,31 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
         aspect = vk::ImageAspectFlagBits::eStencil;
     }
 
-    const auto components = info.mapping == AmdGpu::IdentityMapping
-                                ? vk::ComponentMapping{}
-                                : Vulkan::LiverpoolToVK::ComponentMapping(info.mapping);
+    auto components = info.mapping == AmdGpu::IdentityMapping
+                          ? vk::ComponentMapping{}
+                          : Vulkan::LiverpoolToVK::ComponentMapping(info.mapping);
+
+    // A color view over a depth/stencil image cannot be expressed in Vulkan: the format matches
+    // neither aspect, and a DEPTH|STENCIL aspect is invalid for sampling. Views in the image's
+    // own format are the depth-target attachments and stay untouched; the stencil-plane aliases
+    // are served from a staged copy before reaching here. What is left is coerced to a
+    // depth-only view swizzled to zero: depth is not the data such a shader wants, and zero is
+    // neutral for the masks these aliases carry.
+    if ((aspect & vk::ImageAspectFlagBits::eDepth) &&
+        (aspect & vk::ImageAspectFlagBits::eStencil) && format != image.info.pixel_format) {
+        LOG_WARNING(Render_Vulkan,
+                    "Coercing incompatible view format {} on depth/stencil image to a zeroed depth "
+                    "view",
+                    vk::to_string(format));
+        format = image.info.pixel_format;
+        aspect = vk::ImageAspectFlagBits::eDepth;
+        components = vk::ComponentMapping{
+            .r = vk::ComponentSwizzle::eZero,
+            .g = vk::ComponentSwizzle::eZero,
+            .b = vk::ComponentSwizzle::eZero,
+            .a = vk::ComponentSwizzle::eZero,
+        };
+    }
 
     const vk::ImageViewCreateInfo image_view_ci = {
         .pNext = &usage_ci,
