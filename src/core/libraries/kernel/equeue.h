@@ -155,6 +155,17 @@ public:
         return m_name;
     }
 
+    bool HasGpuEvent() {
+        std::scoped_lock lock{m_mutex};
+        for (const auto& ev : m_events) {
+            if (ev.event.filter == OrbisKernelEvent::Filter::GraphicsCore ||
+                ev.event.filter == OrbisKernelEvent::Filter::VideoOut) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool AddEvent(EqueueEvent& event);
     bool ScheduleEvent(u64 id, s16 filter,
                        void (*callback)(OrbisKernelEqueue, const OrbisKernelEvent&));
@@ -203,6 +214,10 @@ private:
     std::condition_variable m_cond;
     std::unordered_map<u64, SmallTimer> m_small_timers;
 };
+
+/// Records a shader or pipeline compile, so GPU event-queue waits get extra slack for a
+/// while.
+void SignalShaderCompile();
 
 std::shared_ptr<EqueueInternal> GetEqueue(OrbisKernelEqueue eq);
 u64 PS4_SYSV_ABI sceKernelGetEventData(const OrbisKernelEvent* ev);
