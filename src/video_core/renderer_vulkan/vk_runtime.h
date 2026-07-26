@@ -60,6 +60,8 @@ public:
     void CopyDepthStencil(VideoCore::Image* src, VideoCore::Image* dst,
                           const VideoCore::SubresourceRange& sub_range);
 
+    void CopyStencilToColor(VideoCore::Image* src, VideoCore::Image* dst, u32 pack);
+
     void ResolveImage(VideoCore::Image* src, VideoCore::Image* dst,
                       const VideoCore::SubresourceRange& src_range,
                       const VideoCore::SubresourceRange& dst_range);

@@ -135,6 +135,10 @@ public:
     /// Links the stencil plane of a depth surface to its depth image.
     void AssociateStencil(ImageId depth_id, const ImageInfo& depth_info);
 
+    /// Staged color copy of a depth/stencil image's stencil plane, refreshed when the contents
+    /// change. Returns a null id when the view cannot be expressed as such a copy.
+    [[nodiscard]] ImageId FindStencilAliasColorCopy(ImageId depth_image_id, const ImageDesc& desc);
+
     /// Updates image contents if it was modified by CPU.
     void UpdateImage(ImageId image_id) {
         Image& image = slot_images[image_id];
@@ -341,6 +345,10 @@ private:
 
     /// Touch the image in the LRU cache.
     void TouchImage(Image& image) {
+        // Unregistered images (staged stencil copies) have no LRU entry.
+        if (False(image.flags & ImageFlagBits::Registered)) {
+            return;
+        }
         image_lru_cache.Touch(image, gc_tick);
     }
 
