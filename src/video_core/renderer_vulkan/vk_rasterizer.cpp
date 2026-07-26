@@ -878,6 +878,14 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 image_id = depth_image_id;
                 image = &texture_cache.GetImage(image_id);
             }
+            if (image->info.props.is_depth) {
+                // A color view cannot alias the depth/stencil image; serve it from a staged stencil
+                // copy.
+                if (auto copy_id = texture_cache.FindStencilAliasColorCopy(image_id, desc)) {
+                    image_id = copy_id;
+                    image = &texture_cache.GetImage(image_id);
+                }
+            }
             if (image->binding.is_bound) {
                 // The image is already bound. In case if it is about to be used as storage we
                 // need to force general layout on it.
