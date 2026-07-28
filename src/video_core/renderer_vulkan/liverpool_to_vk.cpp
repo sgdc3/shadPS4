@@ -114,6 +114,9 @@ vk::PrimitiveTopology PrimitiveType(AmdGpu::PrimitiveType type) {
         return vk::PrimitiveTopology::eLineList;
     case AmdGpu::PrimitiveType::LineStrip:
         return vk::PrimitiveTopology::eLineStrip;
+    case AmdGpu::PrimitiveType::LineLoop:
+        // Vulkan has no line loop; a strip renders every segment but the closing one.
+        return vk::PrimitiveTopology::eLineStrip;
     case AmdGpu::PrimitiveType::TriangleList:
         return vk::PrimitiveTopology::eTriangleList;
     case AmdGpu::PrimitiveType::TriangleFan:
