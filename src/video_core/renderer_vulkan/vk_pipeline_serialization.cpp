@@ -206,6 +206,12 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
 }
 
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
+    // These are reused across every preloaded pipeline and the early returns below leave the
+    // previous pipeline's values behind, so clear them on entry.
+    fetch_shader = nullptr;
+    infos.fill(nullptr);
+    modules.fill(nullptr);
+
     graphics_key.Deserialize(ar);
 
     GraphicsPipeline::SerializationSupport sdata{};
