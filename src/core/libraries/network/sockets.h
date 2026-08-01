@@ -57,6 +57,10 @@ struct Socket;
 
 typedef std::shared_ptr<Socket> SocketPtr;
 
+/// Returns retval unchanged when non-negative; otherwise maps the last host socket error to
+/// the guest errno and returns -1.
+int ConvertReturnErrorCode(int retval);
+
 struct OrbisNetLinger {
     s32 l_onoff;
     s32 l_linger;
