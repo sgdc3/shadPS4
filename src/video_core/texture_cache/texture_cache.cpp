@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <bit>
 #include <limits>
 #include <xxhash.h>
 
@@ -318,6 +319,30 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
         // Size and resources are greater, expand the image.
         if (image_info.type == cache_image.info.type &&
             !cache_image.info.resources.Contains(image_info.resources)) {
+            // Arrays built one layer per draw would expand and copy on every added layer, O(N^2)
+            // per frame. Grow to the next power of two instead: intermediate counts are served by
+            // a view of the allocated image, and views use the requested layer range, so the
+            // headroom is never sampled.
+            const bool pure_layer_growth =
+                image_info.resources.levels == 1 && cache_image.info.resources.levels == 1 &&
+                image_info.size == cache_image.info.size &&
+                image_info.pixel_format == cache_image.info.pixel_format &&
+                image_info.resources.layers > 0 &&
+                (image_info.guest_size % image_info.resources.layers) == 0;
+            if (pure_layer_growth) {
+                const u32 per_layer = image_info.guest_size / image_info.resources.layers;
+                const u32 cap = std::bit_ceil(image_info.resources.layers);
+                // The whole allocation is tracked and uploaded, so the headroom must stay in mapped
+                // memory.
+                if (cap > image_info.resources.layers &&
+                    Core::Memory::Instance()->IsValidMapping(image_info.guest_address,
+                                                             u64(per_layer) * cap)) {
+                    ImageInfo grown = image_info;
+                    grown.resources.layers = cap;
+                    grown.guest_size = per_layer * cap;
+                    return {ExpandImage(grown, cache_image_id), -1, -1};
+                }
+            }
             return {ExpandImage(image_info, cache_image_id), -1, -1};
         }
 
@@ -567,10 +592,46 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
             // Cannot reuse this image as we need the exact requested format.
             image_id = {};
         } else if (!image_resolved.info.resources.Contains(info.resources)) {
-            // The image was clearly picked up wrong.
+            const auto& resolved_info = image_resolved.info;
+            // A volume rebuilt slice by slice alternates between a growing array view and a 3D view
+            // of the same memory. When the array build restarts, the stale 3D image cannot satisfy
+            // it: dropping it is the expected hand-off, so start the new array with capacity for
+            // every slice.
+            const bool stale_volume_rebuild =
+                resolved_info.type == AmdGpu::ImageType::Color3D &&
+                info.type != AmdGpu::ImageType::Color3D &&
+                resolved_info.guest_address == info.guest_address &&
+                resolved_info.pixel_format == info.pixel_format && info.resources.levels == 1 &&
+                info.resources.layers > 0 && (info.guest_size % info.resources.layers) == 0 &&
+                resolved_info.size.depth >= info.resources.layers;
+            if (stale_volume_rebuild) {
+                const u32 per_layer = info.guest_size / info.resources.layers;
+                u32 cap = std::max(std::bit_ceil(u32{info.resources.layers}),
+                                   std::bit_ceil(resolved_info.size.depth));
+                // The whole allocation is tracked and uploaded, so it must stay in mapped memory.
+                if (!Core::Memory::Instance()->IsValidMapping(info.guest_address,
+                                                              u64(per_layer) * cap)) {
+                    cap = info.resources.layers;
+                }
+                LOG_DEBUG(Render_Vulkan,
+                          "Dropping stale volume image at {:#x} for restarted slice build "
+                          "(depth={}, requested layers={})",
+                          info.guest_address, resolved_info.size.depth, info.resources.layers);
+                desc.info.resources.layers = cap;
+                desc.info.guest_size = per_layer * cap;
+            } else {
+                // The image was clearly picked up wrong.
+                LOG_WARNING(Render_Vulkan,
+                            "Image overlap resolve failed: addr={:#x} requested res={{{},{}}} "
+                            "type={} fmt={} but resolved res={{{},{}}} type={} fmt={}",
+                            info.guest_address, info.resources.levels, info.resources.layers,
+                            static_cast<u32>(info.type), static_cast<u32>(info.pixel_format),
+                            resolved_info.resources.levels, resolved_info.resources.layers,
+                            static_cast<u32>(resolved_info.type),
+                            static_cast<u32>(resolved_info.pixel_format));
+            }
             FreeImage(image_id);
             image_id = {};
-            LOG_WARNING(Render_Vulkan, "Image overlap resolve failed");
         }
     }
     // Create and register a new image
