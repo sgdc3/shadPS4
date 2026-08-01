@@ -144,19 +144,27 @@ s32 PS4_SYSV_ABI sceGnmAddEqEvent(OrbisKernelEqueue eq, u64 id, void* udata) {
 
     Platform::IrqC::Instance()->Register(
         static_cast<Platform::InterruptId>(id),
-        [=](Platform::InterruptId irq) {
+        // Weak: the handler lives until sceGnmDeleteEqEvent, and a deleted queue must drop the
+        // interrupt rather than stay alive.
+        [=, weak_equeue = std::weak_ptr{equeue}](Platform::InterruptId irq) {
             ASSERT_MSG(irq == static_cast<Platform::InterruptId>(id), "An unexpected IRQ occured");
 
             // We need to convert IRQ# to event id
             if (!IsValidEventType(irq))
                 return;
 
+            const auto live_equeue = weak_equeue.lock();
+            if (!live_equeue) {
+                return;
+            }
+
             // Event data is expected to be an event type as per sceGnmGetEqEventType.
-            equeue->TriggerEvent(static_cast<GnmEventType>(id),
-                                 OrbisKernelEvent::Filter::GraphicsCore,
-                                 reinterpret_cast<void*>(id));
+            live_equeue->TriggerEvent(static_cast<GnmEventType>(id),
+                                      OrbisKernelEvent::Filter::GraphicsCore,
+                                      reinterpret_cast<void*>(id));
         },
-        equeue);
+        // Identity key for the IRQ table, not an owning reference.
+        equeue.get());
     return ORBIS_OK;
 }
 
@@ -281,7 +289,7 @@ s32 PS4_SYSV_ABI sceGnmDeleteEqEvent(OrbisKernelEqueue eq, u64 id) {
 
     equeue->RemoveEvent(id, OrbisKernelEvent::Filter::GraphicsCore);
 
-    Platform::IrqC::Instance()->Unregister(static_cast<Platform::InterruptId>(id), equeue);
+    Platform::IrqC::Instance()->Unregister(static_cast<Platform::InterruptId>(id), equeue.get());
     return ORBIS_OK;
 }
 
