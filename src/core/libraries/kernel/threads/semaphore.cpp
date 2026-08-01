@@ -3,6 +3,7 @@
 
 #include <condition_variable>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <semaphore>
 
@@ -311,7 +312,19 @@ public:
 
 using OrbisKernelSema = Common::SlotId;
 
-static Common::SlotVector<std::unique_ptr<OrbisSem>> orbis_sems;
+// SlotVector is not thread-safe and titles create, wait on and delete semaphores from many
+// threads at once. Guard it with its own mutex and hold semaphores through shared_ptr, so one
+// deleted during an unlocked wait outlives the waiter.
+static std::mutex orbis_sems_mutex;
+static Common::SlotVector<std::shared_ptr<OrbisSem>> orbis_sems;
+
+static std::shared_ptr<OrbisSem> FindSem(OrbisKernelSema sem) {
+    std::scoped_lock lk{orbis_sems_mutex};
+    if (!orbis_sems.is_allocated(sem)) {
+        return nullptr;
+    }
+    return orbis_sems[sem];
+}
 
 s32 PS4_SYSV_ABI sceKernelCreateSema(OrbisKernelSema* sem, const char* pName, u32 attr,
                                      s32 initCount, s32 maxCount, const void* pOptParam) {
@@ -319,48 +332,60 @@ s32 PS4_SYSV_ABI sceKernelCreateSema(OrbisKernelSema* sem, const char* pName, u3
         LOG_ERROR(Lib_Kernel, "Semaphore creation parameters are invalid!");
         return ORBIS_KERNEL_ERROR_EINVAL;
     }
-    *sem = orbis_sems.insert(
-        std::move(std::make_unique<OrbisSem>(initCount, maxCount, pName, attr == 1)));
+    auto obj = std::make_shared<OrbisSem>(initCount, maxCount, pName, attr == 1);
+    std::scoped_lock lk{orbis_sems_mutex};
+    *sem = orbis_sems.insert(std::move(obj));
     return ORBIS_OK;
 }
 
 s32 PS4_SYSV_ABI sceKernelWaitSema(OrbisKernelSema sem, s32 needCount, u32* pTimeout) {
-    if (!orbis_sems.is_allocated(sem)) {
+    const auto obj = FindSem(sem);
+    if (!obj) {
         return ORBIS_KERNEL_ERROR_ESRCH;
     }
-    return orbis_sems[sem]->Wait(true, needCount, pTimeout);
+    return obj->Wait(true, needCount, pTimeout);
 }
 
 s32 PS4_SYSV_ABI sceKernelSignalSema(OrbisKernelSema sem, s32 signalCount) {
-    if (!orbis_sems.is_allocated(sem)) {
+    const auto obj = FindSem(sem);
+    if (!obj) {
         return ORBIS_KERNEL_ERROR_ESRCH;
     }
-    if (!orbis_sems[sem]->Signal(signalCount)) {
+    if (!obj->Signal(signalCount)) {
         return ORBIS_KERNEL_ERROR_EINVAL;
     }
     return ORBIS_OK;
 }
 
 s32 PS4_SYSV_ABI sceKernelPollSema(OrbisKernelSema sem, s32 needCount) {
-    if (!orbis_sems.is_allocated(sem)) {
+    const auto obj = FindSem(sem);
+    if (!obj) {
         return ORBIS_KERNEL_ERROR_ESRCH;
     }
-    return orbis_sems[sem]->Wait(false, needCount, nullptr);
+    return obj->Wait(false, needCount, nullptr);
 }
 
 s32 PS4_SYSV_ABI sceKernelCancelSema(OrbisKernelSema sem, s32 setCount, s32* pNumWaitThreads) {
-    if (!orbis_sems.is_allocated(sem)) {
+    const auto obj = FindSem(sem);
+    if (!obj) {
         return ORBIS_KERNEL_ERROR_ESRCH;
     }
-    return orbis_sems[sem]->Cancel(setCount, pNumWaitThreads);
+    return obj->Cancel(setCount, pNumWaitThreads);
 }
 
 s32 PS4_SYSV_ABI sceKernelDeleteSema(OrbisKernelSema sem) {
-    if (!orbis_sems.is_allocated(sem)) {
-        return ORBIS_KERNEL_ERROR_ESRCH;
+    std::shared_ptr<OrbisSem> obj;
+    {
+        std::scoped_lock lk{orbis_sems_mutex};
+        if (!orbis_sems.is_allocated(sem)) {
+            return ORBIS_KERNEL_ERROR_ESRCH;
+        }
+        obj = orbis_sems[sem];
+        // Erase together with the allocation check so two concurrent deletes cannot both succeed.
+        orbis_sems.erase(sem);
     }
-    orbis_sems[sem]->Delete();
-    orbis_sems.erase(sem);
+    // Wake waiters after dropping the container lock; our reference keeps the object alive.
+    obj->Delete();
     return ORBIS_OK;
 }
 
