@@ -3,6 +3,9 @@
 
 #pragma once
 
+// Before the Windows headers below, which define ASSERT unless it already exists.
+#include "common/assert.h"
+
 #ifdef _WIN32
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include <Ws2tcpip.h>
@@ -42,9 +45,12 @@ static const GUID WSAID_WSARECVMSG = {
 #include <unistd.h>
 typedef int net_socket;
 #endif
+#include <condition_variable>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <vector>
 #include "net.h"
 
 namespace Libraries::Kernel {
@@ -131,11 +137,32 @@ struct PosixSocket : public Socket {
     }
 };
 
+class P2PPort;
+
 struct P2PSocket : public Socket {
-    explicit P2PSocket(int domain, int type, int protocol) : Socket(domain, type, protocol) {}
-    bool IsValid() const override {
-        return true;
-    }
+    explicit P2PSocket(int domain, int type, int protocol);
+    ~P2PSocket() override;
+    bool IsValid() const override;
+
+    // Host socket shared by every P2P socket on the same (address, port); null until bound.
+    std::shared_ptr<P2PPort> port;
+    // Receives this vport's datagrams from the port's receive thread; what Native() returns.
+    net_socket inbox;
+    sockaddr_in inbox_addr{};
+    u32 bound_addr{};  // network byte order
+    u16 bound_port{};  // network byte order
+    u16 bound_vport{}; // network byte order
+    bool bound{};
+    // Default destination recorded by Connect(), used by sends that carry no address.
+    u32 peer_addr{};  // network byte order
+    u16 peer_port{};  // network byte order
+    u16 peer_vport{}; // network byte order
+    bool connected{};
+    // Cached options: SO_NBIO decides whether an empty recv blocks, SO_REUSE* whether a vport
+    // can be shared.
+    int sockopt_so_nbio{};
+    int sockopt_so_reuseaddr{};
+    int sockopt_so_reuseport{};
     int Close() override;
     int Shutdown(int how) override;
     int SetSocketOptions(int level, int optname, const void* optval, u32 optlen) override;
@@ -153,8 +180,13 @@ struct P2PSocket : public Socket {
     int GetPeerName(OrbisNetSockaddr* addr, u32* namelen) override;
     int fstat(Libraries::Kernel::OrbisKernelStat* stat) override;
     std::optional<net_socket> Native() override {
-        return {};
+        return inbox;
     }
+
+private:
+    /// Binds to an OS-chosen port and an ephemeral vport. Returns 0, or -1 with the guest errno
+    /// set.
+    int EnsureBound();
 };
 
 struct UnixSocket : public Socket {
