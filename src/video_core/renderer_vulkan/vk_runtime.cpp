@@ -51,9 +51,18 @@ static std::pair<u32, u32> SanitizeCopyLayers(const VideoCore::ImageInfo& src_in
     // If the image type is equal, layer count must match. Take the minimum of both.
     if (vk_src_type == vk_dst_type) {
         if (src_layers != dst_layers) {
-            LOG_WARNING(Render_Vulkan,
-                        "Coercing copy source layers {} and destination layers {} to minimum.",
-                        src_layers, dst_layers);
+            if (src_layers > dst_layers) {
+                // Source layers past the destination's capacity are dropped.
+                LOG_WARNING(Render_Vulkan,
+                            "Coercing copy source layers {} and destination layers {} to minimum.",
+                            src_layers, dst_layers);
+            } else {
+                // Spare destination layers lose nothing; arrays allocated with growth headroom hit
+                // this constantly.
+                LOG_DEBUG(Render_Vulkan,
+                          "Coercing copy source layers {} and destination layers {} to minimum.",
+                          src_layers, dst_layers);
+            }
             src_layers = dst_layers = std::min(src_layers, dst_layers);
         }
     } else {
