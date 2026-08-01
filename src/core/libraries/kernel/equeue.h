@@ -183,13 +183,28 @@ public:
 private:
     OrbisKernelEqueue m_handle;
     std::string m_name;
+
+public:
+    // Wakes every waiter so an indefinite wait returns after the queue is deleted.
+    void MarkDeleted() {
+        {
+            std::scoped_lock lock{m_mutex};
+            m_deleted = true;
+        }
+        m_cond.notify_all();
+    }
+
+private:
+    // Set on delete so an indefinite waiter wakes up.
+    bool m_deleted{false};
+
     std::mutex m_mutex;
     std::vector<EqueueEvent> m_events;
     std::condition_variable m_cond;
     std::unordered_map<u64, SmallTimer> m_small_timers;
 };
 
-EqueueInternal* GetEqueue(OrbisKernelEqueue eq);
+std::shared_ptr<EqueueInternal> GetEqueue(OrbisKernelEqueue eq);
 u64 PS4_SYSV_ABI sceKernelGetEventData(const OrbisKernelEvent* ev);
 
 void RegisterEventQueue(Core::Loader::SymbolsResolver* sym);
