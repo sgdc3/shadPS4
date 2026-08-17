@@ -227,9 +227,11 @@ public:
     void V_EXP_F32(const GcnInst& inst);
     void V_LOG_F32(const GcnInst& inst);
     void V_RCP_F32(const GcnInst& inst);
+    void V_RCP_CLAMP_F32(const GcnInst& inst);
     void V_RCP_LEGACY_F32(const GcnInst& inst);
     void V_RCP_F64(const GcnInst& inst);
     void V_RSQ_F32(const GcnInst& inst);
+    void V_RSQ_CLAMP_F32(const GcnInst& inst);
     void V_SQRT_F32(const GcnInst& inst);
     void V_SIN_F32(const GcnInst& inst);
     void V_COS_F32(const GcnInst& inst);
@@ -378,6 +380,7 @@ private:
     IR::U32 GetCarryIn(const GcnInst& inst);
     void SetCarryOut(const GcnInst& inst, const IR::U1& carry);
     IR::F32 LegacyMul(const IR::F32& a, const IR::F32& b);
+    IR::F32 FPClampInfToMax(const IR::F32& value);
     IR::U32 VMovRelSHelper(u32 src_vgprno, const IR::U32 m0);
     void VMovRelDHelper(u32 dst_vgprno, const IR::U32 src_val, const IR::U32 m0);
 
