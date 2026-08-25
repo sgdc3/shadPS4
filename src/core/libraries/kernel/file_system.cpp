@@ -1249,9 +1249,15 @@ s32 PS4_SYSV_ABI posix_unlink(const char* path) {
 
     auto* file = h->GetFile(host_path);
     if (file == nullptr) {
-        // File to unlink hasn't been opened, manually open and unlink it.
-        Common::FS::IOFile file(host_path, Common::FS::FileAccessMode::ReadWrite);
-        file.Unlink();
+        // File to unlink hasn't been opened, so drop it outright. Opening it first would only
+        // add a way to fail: a sharing conflict there used to leave the file in place.
+        std::error_code ec;
+        fs::remove(host_path, ec);
+        if (ec) {
+            *__Error() = POSIX_EACCES;
+            LOG_ERROR(Kernel_Fs, "Unlinking {} failed, {}", path, ec.message());
+            return -1;
+        }
     } else if (auto* host = file->GetHostFile()) {
         host->Unlink();
     }
