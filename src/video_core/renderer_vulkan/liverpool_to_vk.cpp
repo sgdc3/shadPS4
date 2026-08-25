@@ -827,8 +827,13 @@ vk::Format DepthFormat(DepthBuffer::ZFormat z_format, DepthBuffer::StencilFormat
 }
 
 vk::ClearValue ColorBufferClearValue(const AmdGpu::ColorBuffer& color_buffer) {
-    const auto comp_swizzle = color_buffer.Swizzle();
     const auto format = AmdGpu::DataFormat(color_buffer.info.format);
+    // CB_COLORn_CLEAR_WORD already holds the value in the surface's memory layout: it is the raw
+    // data a fast clear writes out. Applying COMP_SWAP on top of it swaps the channels a second
+    // time, because everything else that fills these images is already in memory order (the
+    // fragment export applies COMP_SWAP itself). Only the remap our own format choice implies is
+    // needed, which is what an identity source mapping gives.
+    const auto comp_swizzle = AmdGpu::RemapSwizzle(format, AmdGpu::IdentityMapping);
     const auto number_type = color_buffer.GetFixedNumberFormat();
 
     const auto& c0 = color_buffer.clear_word0;
