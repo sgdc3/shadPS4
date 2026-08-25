@@ -246,6 +246,7 @@ private:
     FileType file_type{};
 
     uintptr_t file_mapping = 0;
+    bool unlink_at_close = false;
 };
 
 u64 GetDirectorySize(const std::filesystem::path& path);
