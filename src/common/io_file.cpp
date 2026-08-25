@@ -164,6 +164,7 @@ IOFile::IOFile(IOFile&& other) noexcept {
     std::swap(file_access_mode, other.file_access_mode);
     std::swap(file_type, other.file_type);
     std::swap(file, other.file);
+    std::swap(unlink_at_close, other.unlink_at_close);
 }
 
 IOFile& IOFile::operator=(IOFile&& other) noexcept {
@@ -171,6 +172,7 @@ IOFile& IOFile::operator=(IOFile&& other) noexcept {
     std::swap(file_access_mode, other.file_access_mode);
     std::swap(file_type, other.file_type);
     std::swap(file, other.file);
+    std::swap(unlink_at_close, other.unlink_at_close);
     return *this;
 }
 
@@ -226,6 +228,16 @@ void IOFile::Close() {
     if (file_mapping && file_access_mode == FileAccessMode::ReadWrite) {
         CloseHandle(std::bit_cast<HANDLE>(file_mapping));
     }
+
+    if (unlink_at_close) {
+        unlink_at_close = false;
+        std::error_code ec;
+        fs::remove(file_path, ec);
+        if (ec) {
+            LOG_ERROR(Common_Filesystem, "Failed to unlink the file at path={}, ec_message={}",
+                      PathToUTF8String(file_path), ec.message());
+        }
+    }
 #endif
 }
 
@@ -235,7 +247,6 @@ void IOFile::Unlink() {
     }
 
     // Mark the file for deletion
-    // TODO: Also remove the file path?
 #ifdef _WIN64
     FILE_DISPOSITION_INFORMATION disposition;
     IO_STATUS_BLOCK iosb;
@@ -244,8 +255,12 @@ void IOFile::Unlink() {
     HANDLE hfile = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
 
     disposition.DeleteFile = TRUE;
-    NtSetInformationFile(hfile, &iosb, &disposition, sizeof(disposition),
-                         FileDispositionInformation);
+    const auto status = static_cast<s32>(NtSetInformationFile(
+        hfile, &iosb, &disposition, sizeof(disposition), FileDispositionInformation));
+    // A disposition needs DELETE access on the handle, which the stream this class opens never
+    // asks for, so the request comes back as STATUS_ACCESS_DENIED and the file would outlive its
+    // unlink. Drop the name ourselves once our handle is gone instead.
+    unlink_at_close = status < 0;
 #else
     if (unlink(file_path.c_str()) != 0) {
         const auto ec = std::error_code{errno, std::generic_category()};
