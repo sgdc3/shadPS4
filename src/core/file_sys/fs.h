@@ -96,29 +96,35 @@ public:
     /// when the file does not exist or is unreadable.
     std::optional<std::vector<u8>> ReadFile(std::string_view guest_path);
 
-    const MntPair* GetMountFromHostPath(const std::string& host_path) {
+    // A mount is handed out as a shared_ptr, not as a pointer into m_mnt_pairs, because the lock
+    // is released the moment the lookup returns while the caller goes on to walk the mount's
+    // backends. Mount/Unmount/UnmountAll all mutate the vector, so a raw MntPair* could be
+    // reallocated, shifted or destroyed underneath a file operation already in flight - and the
+    // background loading threads do exactly that. Sharing ownership keeps the entry alive for as
+    // long as anyone is still using it; an unmount just stops new lookups from finding it.
+    std::shared_ptr<const MntPair> GetMountFromHostPath(const std::string& host_path) {
         std::scoped_lock lock{m_mutex};
-        const auto it = std::ranges::find_if(m_mnt_pairs, [&](const MntPair& mount) {
-            return host_path.starts_with(std::string{fmt::UTF(mount.host_path.u8string()).data});
+        const auto it = std::ranges::find_if(m_mnt_pairs, [&](const auto& mount) {
+            return host_path.starts_with(std::string{fmt::UTF(mount->host_path.u8string()).data});
         });
-        return it == m_mnt_pairs.end() ? nullptr : &*it;
+        return it == m_mnt_pairs.end() ? nullptr : *it;
     }
 
-    const MntPair* GetMount(const std::string& guest_path) {
+    std::shared_ptr<const MntPair> GetMount(const std::string& guest_path) {
         std::scoped_lock lock{m_mutex};
         const auto it = std::ranges::find_if(m_mnt_pairs, [&](const auto& mount) {
             // When doing starts-with check, add a trailing slash to make sure we don't match
             // against only part of the mount path.
-            return guest_path == mount.mount || guest_path.starts_with(mount.mount + "/");
+            return guest_path == mount->mount || guest_path.starts_with(mount->mount + "/");
         });
         if (it == m_mnt_pairs.end()) {
             return nullptr;
         }
-        return &*it;
+        return *it;
     }
 
 private:
-    std::vector<MntPair> m_mnt_pairs;
+    std::vector<std::shared_ptr<MntPair>> m_mnt_pairs;
     std::vector<std::filesystem::path> path_parts;
     tsl::robin_map<std::filesystem::path, std::filesystem::path> path_cache;
     std::mutex m_mutex;
