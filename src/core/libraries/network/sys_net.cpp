@@ -72,7 +72,7 @@ int PS4_SYSV_ABI sys_accept(OrbisNetId s, OrbisNetSockaddr* addr, u32* paddrlen)
         return -1;
     }
     auto fd = FDTable::Instance()->CreateHandle();
-    auto* new_file = FDTable::Instance()->GetFile(fd);
+    auto new_file = FDTable::Instance()->GetFile(fd);
     new_file->is_opened = true;
     new_file->type = Core::FileSys::FileType::Socket;
     new_file->socket = new_sock;
@@ -223,7 +223,7 @@ int PS4_SYSV_ABI sys_socketex(const char* name, int family, int type, int protoc
     }
 
     auto fd = FDTable::Instance()->CreateHandle();
-    auto* sock = FDTable::Instance()->GetFile(fd);
+    auto sock = FDTable::Instance()->GetFile(fd);
     sock->is_opened = true;
     sock->type = Core::FileSys::FileType::Socket;
     sock->socket = socket;
@@ -313,7 +313,7 @@ int PS4_SYSV_ABI sys_socketpair(int family, int type, int protocol, int sv[2]) {
 
     auto fd1 = FDTable::Instance()->CreateHandle();
     auto fd2 = FDTable::Instance()->CreateHandle();
-    auto* sock = FDTable::Instance()->GetFile(fd1);
+    auto sock = FDTable::Instance()->GetFile(fd1);
     sock->is_opened = true;
     sock->type = Core::FileSys::FileType::Socket;
     sock->socket = std::make_shared<UnixSocket>(fd[0]);

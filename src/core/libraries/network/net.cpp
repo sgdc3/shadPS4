@@ -948,7 +948,7 @@ int PS4_SYSV_ABI sceNetEpollCreate(const char* name, int flags) {
     }
 
     auto fd = FDTable::Instance()->CreateHandle();
-    auto* epoll = FDTable::Instance()->GetFile(fd);
+    auto epoll = FDTable::Instance()->GetFile(fd);
     epoll->is_opened = true;
     epoll->type = Core::FileSys::FileType::Epoll;
     epoll->epoll = std::make_shared<Epoll>(name);
@@ -1214,13 +1214,13 @@ int PS4_SYSV_ABI sceNetGetSockInfo(OrbisNetId s, OrbisNetSockInfo* info, int n, 
     }
 
     if (s >= 0) {
-        auto* file = FDTable::Instance()->GetSocket(s);
+        auto file = FDTable::Instance()->GetSocket(s);
         if (!file) {
             LOG_ERROR(Lib_Net, "socket id is invalid = {}", s);
             *sceNetErrnoLoc() = ORBIS_NET_EBADF;
             return ORBIS_NET_ERROR_EBADF;
         }
-        FillSockInfo(s, file, info);
+        FillSockInfo(s, file.get(), info);
         LOG_DEBUG(Lib_Net, "s = {} ({}), state = {}, flags = {:#x}", s, file->m_guest_name,
                   info->state, info->flags);
         return 1;
@@ -1231,11 +1231,11 @@ int PS4_SYSV_ABI sceNetGetSockInfo(OrbisNetId s, OrbisNetSockInfo* info, int n, 
         if (written >= n) {
             break;
         }
-        auto* file = FDTable::Instance()->GetSocket(id);
+        auto file = FDTable::Instance()->GetSocket(id);
         if (!file) {
             continue;
         }
-        FillSockInfo(id, file, &info[written]);
+        FillSockInfo(id, file.get(), &info[written]);
         written++;
     }
     LOG_DEBUG(Lib_Net, "enumerated {} of at most {} sockets (flags = {:#x})", written, n, flags);
@@ -1603,7 +1603,7 @@ int PS4_SYSV_ABI sceNetResolverCreate(const char* name, int poolid, int flags) {
     }
 
     auto fd = FDTable::Instance()->CreateHandle();
-    auto* resolver = FDTable::Instance()->GetFile(fd);
+    auto resolver = FDTable::Instance()->GetFile(fd);
     resolver->is_opened = true;
     resolver->type = Core::FileSys::FileType::Resolver;
     resolver->resolver = std::make_shared<Resolver>(safe_name, poolid, flags);

@@ -197,18 +197,23 @@ public:
 
     int CreateHandle();
     void DeleteHandle(int d);
-    File* GetFile(int d);
-    File* GetSocket(int d);
+    // The lookups hand out shared ownership rather than a pointer into m_files. A File carries its
+    // own mutex, and callers lock it long after this lock is gone; DeleteHandle used to destroy the
+    // File - mutex included - while another thread was still holding it, which is a use-after-free
+    // that surfaces as "mutex lock failed: Invalid argument" on libc++ and passes silently on
+    // Windows. Closing a handle now only drops the table's reference; the last user frees it.
+    std::shared_ptr<File> GetFile(int d);
+    std::shared_ptr<File> GetSocket(int d);
     std::vector<int> GetSocketHandles();
-    File* GetEpoll(int d);
-    File* GetResolver(int d);
-    File* GetFile(const std::filesystem::path& host_name);
+    std::shared_ptr<File> GetEpoll(int d);
+    std::shared_ptr<File> GetResolver(int d);
+    std::shared_ptr<File> GetFile(const std::filesystem::path& host_name);
     int GetFileDescriptor(File* file);
 
     void CreateStdHandles();
 
 private:
-    std::vector<File*> m_files;
+    std::vector<std::shared_ptr<File>> m_files;
     std::mutex m_mutex;
 };
 

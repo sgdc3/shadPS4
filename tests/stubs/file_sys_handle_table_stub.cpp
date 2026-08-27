@@ -7,6 +7,8 @@
 // Kept apart from file_sys_stub.cpp so the other test targets, which need only the game-file
 // helpers from that stub, do not pull the handle table in as well.
 
+#include <memory>
+
 #include "core/file_sys/fs.h"
 
 namespace Core::FileSys {
@@ -14,7 +16,7 @@ namespace Core::FileSys {
 int HandleTable::CreateHandle() {
     std::scoped_lock lock{m_mutex};
 
-    auto* file = new File{};
+    auto file = std::make_shared<File>();
     file->is_opened = false;
 
     int existing_files_num = m_files.size();
@@ -32,11 +34,11 @@ int HandleTable::CreateHandle() {
 
 void HandleTable::DeleteHandle(int d) {
     std::scoped_lock lock{m_mutex};
-    delete m_files.at(d);
-    m_files[d] = nullptr;
+    // Mirrors the real table: closing a handle only drops the table's reference.
+    m_files.at(d).reset();
 }
 
-File* HandleTable::GetFile(int d) {
+std::shared_ptr<File> HandleTable::GetFile(int d) {
     std::scoped_lock lock{m_mutex};
     if (d < 0 || d >= m_files.size()) {
         return nullptr;
