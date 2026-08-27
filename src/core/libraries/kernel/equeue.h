@@ -173,6 +173,9 @@ public:
     int WaitForEvents(OrbisKernelEvent* ev, int num, const OrbisKernelUseconds* timo);
     bool TriggerEvent(u64 ident, s16 filter, void* trigger_data);
     int GetTriggeredEvents(OrbisKernelEvent* ev, int num);
+    // Same, for callers that already hold m_mutex: the condition-variable predicate runs under the
+    // wait's lock and must not take it again.
+    int GetTriggeredEventsLocked(OrbisKernelEvent* ev, int num);
 
     bool AddSmallTimer(EqueueEvent& event);
     bool HasSmallTimer() {
