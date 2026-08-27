@@ -196,18 +196,20 @@ public:
 
     int CreateHandle();
     void DeleteHandle(int d);
-    File* GetFile(int d);
-    File* GetSocket(int d);
+    // Shared ownership rather than a pointer into m_files: a File carries its own mutex, which
+    // callers lock after this lock is gone, and DeleteHandle used to destroy it meanwhile.
+    std::shared_ptr<File> GetFile(int d);
+    std::shared_ptr<File> GetSocket(int d);
     std::vector<int> GetSocketHandles();
-    File* GetEpoll(int d);
-    File* GetResolver(int d);
-    File* GetFile(const std::filesystem::path& host_name);
+    std::shared_ptr<File> GetEpoll(int d);
+    std::shared_ptr<File> GetResolver(int d);
+    std::shared_ptr<File> GetFile(const std::filesystem::path& host_name);
     int GetFileDescriptor(File* file);
 
     void CreateStdHandles();
 
 private:
-    std::vector<File*> m_files;
+    std::vector<std::shared_ptr<File>> m_files;
     std::mutex m_mutex;
 };
 
