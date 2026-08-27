@@ -141,8 +141,8 @@ void MntPoints::Mount(const std::filesystem::path& host_folder, const std::strin
     ASSERT_MSG(base, "Mount: base path does not resolve to a backend: {}", host_folder.string());
     stack.push_back(std::move(base));
 
-    m_mnt_pairs.push_back(std::make_shared<MntPair>(host_folder, guest_folder_sanitized,
-                                                    read_only, std::move(stack)));
+    m_mnt_pairs.push_back(std::make_shared<MntPair>(host_folder, guest_folder_sanitized, read_only,
+                                                    std::move(stack)));
 }
 
 void MntPoints::Unmount(const std::filesystem::path& host_folder, const std::string& guest_folder) {
