@@ -194,7 +194,7 @@ s32 PS4_SYSV_ABI open(const char* raw_path, s32 flags, u16 mode) {
     }
     const std::string& path = *sanitized_path;
     u32 handle = h->CreateHandle();
-    auto* file = h->GetFile(handle);
+    auto file = h->GetFile(handle);
 
     if (path.starts_with("/dev/")) {
         for (const auto& [prefix, factory] : available_device) {
@@ -347,7 +347,7 @@ s32 PS4_SYSV_ABI sceKernelOpen(const char* path, s32 flags, /* SceKernelMode*/ u
 
 s32 PS4_SYSV_ABI close(s32 fd) {
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -359,7 +359,7 @@ s32 PS4_SYSV_ABI close(s32 fd) {
     if (file->type == Core::FileSys::FileType::Socket) {
         return Libraries::Net::KernelClose(fd);
     }
-    ReleaseFlockState(file);
+    ReleaseFlockState(file.get());
     if (file->type == Core::FileSys::FileType::Regular) {
         file->handle.reset();
     }
@@ -385,7 +385,7 @@ s32 PS4_SYSV_ABI sceKernelClose(s32 fd) {
 
 s64 PS4_SYSV_ABI write(s32 fd, const void* buf, u64 nbytes) {
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -448,7 +448,7 @@ s64 ReadFile(Core::FileSys::File* file, void* buf, u64 nbytes) {
 
 s64 PS4_SYSV_ABI readv(s32 fd, const OrbisKernelIovec* iov, s32 iovcnt) {
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -478,7 +478,7 @@ s64 PS4_SYSV_ABI readv(s32 fd, const OrbisKernelIovec* iov, s32 iovcnt) {
 
     s64 total_read = 0;
     for (s32 i = 0; i < iovcnt; i++) {
-        total_read += ReadFile(file, iov[i].iov_base, iov[i].iov_len);
+        total_read += ReadFile(file.get(), iov[i].iov_base, iov[i].iov_len);
     }
     return total_read;
 }
@@ -498,7 +498,7 @@ s64 PS4_SYSV_ABI sceKernelReadv(s32 fd, const OrbisKernelIovec* iov, s32 iovcnt)
 
 s64 PS4_SYSV_ABI writev(s32 fd, const OrbisKernelIovec* iov, s32 iovcnt) {
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -545,7 +545,7 @@ s64 PS4_SYSV_ABI sceKernelWritev(s32 fd, const OrbisKernelIovec* iov, s32 iovcnt
 
 s64 PS4_SYSV_ABI posix_lseek(s32 fd, s64 offset, s32 whence) {
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -615,7 +615,7 @@ s64 PS4_SYSV_ABI sceKernelLseek(s32 fd, s64 offset, s32 whence) {
 
 s64 PS4_SYSV_ABI read(s32 fd, void* buf, u64 nbytes) {
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -646,7 +646,7 @@ s64 PS4_SYSV_ABI read(s32 fd, void* buf, u64 nbytes) {
         return -1;
     }
 
-    return ReadFile(file, buf, nbytes);
+    return ReadFile(file.get(), buf, nbytes);
 }
 
 s64 PS4_SYSV_ABI posix_read(s32 fd, void* buf, u64 nbytes) {
@@ -925,7 +925,7 @@ s32 PS4_SYSV_ABI fstat(s32 fd, OrbisKernelStat* sb) {
         return -1;
     }
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -1005,7 +1005,7 @@ s32 PS4_SYSV_ABI posix_ftruncate(s32 fd, s64 length) {
     }
 
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
 
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
@@ -1154,7 +1154,7 @@ s32 PS4_SYSV_ABI sceKernelChmod(const char* path, u32 mode) {
 
 s32 PS4_SYSV_ABI posix_fchmod(s32 fd, u32 mode) {
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    const auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -1288,7 +1288,7 @@ s32 PS4_SYSV_ABI posix_futimes(s32 fd, const OrbisKernelTimeval* times) {
     }
 
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    const auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -1453,7 +1453,7 @@ s64 PS4_SYSV_ABI posix_preadv(s32 fd, OrbisKernelIovec* iov, s32 iovcnt, s64 off
     }
 
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -1491,7 +1491,7 @@ s64 PS4_SYSV_ABI posix_preadv(s32 fd, OrbisKernelIovec* iov, s32 iovcnt, s64 off
     }
     s64 total_read = 0;
     for (s32 i = 0; i < iovcnt; i++) {
-        total_read += ReadFile(file, iov[i].iov_base, iov[i].iov_len);
+        total_read += ReadFile(file.get(), iov[i].iov_base, iov[i].iov_len);
     }
     return total_read;
 }
@@ -1517,7 +1517,7 @@ s64 PS4_SYSV_ABI sceKernelPread(s32 fd, void* buf, u64 nbytes, s64 offset) {
 
 s32 PS4_SYSV_ABI posix_fsync(s32 fd) {
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -1571,7 +1571,9 @@ s32 PS4_SYSV_ABI posix_flock(s32 fd, s32 operation) {
     LOG_TRACE(Kernel_Fs, "fd = {}, operation = {:#x}", fd, operation);
 
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    // Held for the whole call, a blocking lock keeps reading the file while it waits.
+    const auto file_ref = h->GetFile(fd);
+    auto* file = file_ref.get();
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -1745,7 +1747,7 @@ static s64 GetDents(s32 fd, char* buf, u64 nbytes, s64* basep) {
         return -1;
     }
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -1820,7 +1822,7 @@ s64 PS4_SYSV_ABI posix_pwritev(s32 fd, const OrbisKernelIovec* iov, s32 iovcnt, 
     }
 
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(fd);
+    auto file = h->GetFile(fd);
     if (file == nullptr) {
         *__Error() = POSIX_EBADF;
         return -1;
@@ -1918,7 +1920,7 @@ s32 PS4_SYSV_ABI posix_unlink(const char* path) {
         return -1;
     }
 
-    auto* file = h->GetFile(host_path);
+    auto file = h->GetFile(host_path);
     if (file == nullptr) {
         // Nothing holds the file open; remove it directly rather than open it first.
         std::error_code ec;
@@ -1991,7 +1993,7 @@ s32 PS4_SYSV_ABI posix_select(s32 nfds, GuestFdSet* readfds, GuestFdSet* writefd
         if (!want_read && !want_write && !GuestFdIsSet(exceptfds, i)) {
             continue;
         }
-        auto* file = h->GetFile(i);
+        auto file = h->GetFile(i);
         if (!file || ((file->type == Core::FileSys::FileType::Regular && !file->IsBackendOpen()) ||
                       (file->type == Core::FileSys::FileType::Socket && !file->is_opened))) {
             LOG_ERROR(Kernel_Fs, "fd {} is null or not opened", i);

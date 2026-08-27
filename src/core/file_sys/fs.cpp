@@ -625,7 +625,7 @@ std::optional<std::vector<u8>> MntPoints::ReadFile(std::string_view guest_path) 
 int HandleTable::CreateHandle() {
     std::scoped_lock lock{m_mutex};
 
-    auto* file = new File{};
+    auto file = std::make_shared<File>();
     file->is_opened = false;
 
     int existingFilesNum = m_files.size();
@@ -643,11 +643,11 @@ int HandleTable::CreateHandle() {
 
 void HandleTable::DeleteHandle(int d) {
     std::scoped_lock lock{m_mutex};
-    delete m_files.at(d);
-    m_files[d] = nullptr;
+    // Only drop the table's reference; a thread that looked the handle up keeps the File alive.
+    m_files.at(d).reset();
 }
 
-File* HandleTable::GetFile(int d) {
+std::shared_ptr<File> HandleTable::GetFile(int d) {
     std::scoped_lock lock{m_mutex};
     if (d < 0 || d >= m_files.size()) {
         return nullptr;
@@ -655,7 +655,7 @@ File* HandleTable::GetFile(int d) {
     return m_files.at(d);
 }
 
-File* HandleTable::GetSocket(int d) {
+std::shared_ptr<File> HandleTable::GetSocket(int d) {
     std::scoped_lock lock{m_mutex};
     if (d < 0 || d >= m_files.size()) {
         return nullptr;
@@ -674,7 +674,7 @@ std::vector<int> HandleTable::GetSocketHandles() {
     std::scoped_lock lock{m_mutex};
     std::vector<int> handles;
     for (int index = 0; index < m_files.size(); index++) {
-        const auto* file = m_files.at(index);
+        const auto& file = m_files.at(index);
         if (file && file->type == Core::FileSys::FileType::Socket) {
             handles.push_back(index);
         }
@@ -682,9 +682,9 @@ std::vector<int> HandleTable::GetSocketHandles() {
     return handles;
 }
 
-File* HandleTable::GetFile(const std::filesystem::path& host_name) {
+std::shared_ptr<File> HandleTable::GetFile(const std::filesystem::path& host_name) {
     std::scoped_lock lock{m_mutex};
-    for (auto* file : m_files) {
+    for (const auto& file : m_files) {
         if (file != nullptr && file->m_host_name == host_name) {
             return file;
         }
@@ -695,7 +695,7 @@ File* HandleTable::GetFile(const std::filesystem::path& host_name) {
 void HandleTable::CreateStdHandles() {
     auto setup = [this](const char* path, auto* device) {
         int fd = CreateHandle();
-        auto* file = GetFile(fd);
+        auto file = GetFile(fd);
         file->is_opened = true;
         file->type = FileType::Device;
         file->m_guest_name = path;
@@ -710,7 +710,8 @@ void HandleTable::CreateStdHandles() {
 
 int HandleTable::GetFileDescriptor(File* file) {
     std::scoped_lock lock{m_mutex};
-    auto it = std::find(m_files.begin(), m_files.end(), file);
+    const auto it = std::find_if(m_files.begin(), m_files.end(),
+                                 [file](const auto& slot) { return slot.get() == file; });
 
     if (it != m_files.end()) {
         return std::distance(m_files.begin(), it);
@@ -719,8 +720,13 @@ int HandleTable::GetFileDescriptor(File* file) {
 }
 
 void HandleTable::FlushAll() {
-    std::scoped_lock lock{m_mutex};
-    for (auto* file : m_files) {
+    // Flush outside the table lock so a slow flush does not stall every file lookup.
+    std::vector<std::shared_ptr<File>> files;
+    {
+        std::scoped_lock lock{m_mutex};
+        files = m_files;
+    }
+    for (const auto& file : files) {
         if (file != nullptr && file->is_opened) {
             std::scoped_lock lk{file->m_mutex};
             if (file->type == FileType::Device && file->device) {
