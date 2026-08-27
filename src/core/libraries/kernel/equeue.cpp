@@ -229,7 +229,8 @@ int EqueueInternal::WaitForEvents(OrbisKernelEvent* ev, int num, const OrbisKern
     int count = 0;
 
     const auto predicate = [&] {
-        count = GetTriggeredEvents(ev, num);
+        // Already under the wait's lock.
+        count = GetTriggeredEventsLocked(ev, num);
         return count > 0 || m_deleted;
     };
 
@@ -271,6 +272,12 @@ bool EqueueInternal::TriggerEvent(u64 ident, s16 filter, void* trigger_data) {
 }
 
 int EqueueInternal::GetTriggeredEvents(OrbisKernelEvent* ev, int num) {
+    std::scoped_lock lock{m_mutex};
+    return GetTriggeredEventsLocked(ev, num);
+}
+
+// Consumes triggered events, erasing one-shot entries, so the caller must hold m_mutex.
+int EqueueInternal::GetTriggeredEventsLocked(OrbisKernelEvent* ev, int num) {
     int count = 0;
     for (auto it = m_events.begin(); it != m_events.end();) {
         if (it->IsTriggered()) {
