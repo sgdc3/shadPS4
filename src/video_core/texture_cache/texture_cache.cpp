@@ -170,6 +170,23 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
     }
 }
 
+void TextureCache::RefreshFillAlias(VAddr address, u64 size) {
+    const ImageId image_id = FindImageFromRange(address, size, false);
+    if (!image_id) {
+        return;
+    }
+    Image& image = slot_images[image_id];
+    if (image.info.guest_size != size || image.info.props.is_depth || image.info.num_samples > 1) {
+        return;
+    }
+    // The guest-memory hash shortcut would veto this GPU-side refresh; drop the bit.
+    image.flags &= ~ImageFlagBits::MaybeCpuDirty;
+    image.flags |= ImageFlagBits::GpuDirty;
+    force_refresh_once = true;
+    RefreshImage(image);
+    force_refresh_once = false;
+}
+
 void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
     ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
         // Every image the write covers is stale, not only one starting at the same address: a
@@ -907,8 +924,8 @@ void TextureCache::RefreshImage(Image& image) {
     // at the first use of the next frame. frame_epoch only advances on flips patched into the
     // command stream; titles that flip from the CPU never pass the epoch > 1 check.
     const u64 epoch = frame_epoch.load(std::memory_order_relaxed);
-    if (defer_rt_refresh && epoch > 1 && True(image.flags & ImageFlagBits::GpuModified) &&
-        image.last_gpu_write_epoch == epoch) {
+    if (defer_rt_refresh && !force_refresh_once && epoch > 1 &&
+        True(image.flags & ImageFlagBits::GpuModified) && image.last_gpu_write_epoch == epoch) {
         return;
     }
 
