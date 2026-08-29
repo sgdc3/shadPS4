@@ -51,6 +51,7 @@ public:
                       VAddr count_address, u16 vertex_sgpr_offset, u16 instance_sgpr_offset);
 
     void DispatchDirect();
+
     void DispatchIndirect(VAddr address, u32 offset, u32 size);
 
     void ScopeMarker(fmt::string_view fmt, fmt::format_args args, auto&& func) {
@@ -134,6 +135,8 @@ private:
     bool IsComputeMetaClear(const Pipeline* pipeline);
     bool IsComputeImageCopy(const Pipeline* pipeline);
     bool IsComputeImageClear(const Pipeline* pipeline);
+    bool MatchComputeSurfaceFill(const Pipeline* pipeline, VAddr& out_address, u64& out_size,
+                                 u32& out_mask, u32& out_value);
 
 private:
     friend class VideoCore::BufferCache;
