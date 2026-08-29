@@ -253,6 +253,10 @@ public:
         frame_epoch.fetch_add(1, std::memory_order_relaxed);
     }
 
+    /// Refreshes the image exactly aliasing a range a fill dispatch just rewrote, in stream,
+    /// bypassing the mid-frame deferral once.
+    void RefreshFillAlias(VAddr address, u64 size);
+
     template <typename Func>
     void ForEachImageInRegion(VAddr cpu_addr, size_t size, Func&& func) {
         using FuncReturn = typename std::invoke_result<Func, ImageId, Image&>::type;
@@ -391,6 +395,8 @@ private:
     u64 gc_tick = 0;
     // Bumped on the command-processor thread, read from the presenter too.
     std::atomic<u64> frame_epoch = 1;
+    /// One-shot bypass of the mid-frame refresh deferral, set only by RefreshFillAlias.
+    bool force_refresh_once = false;
     Common::LRUCache<Image> image_lru_cache;
     Common::LRUCache<Sampler> sampler_lru_cache;
     const bool readback_linear_images;
