@@ -132,6 +132,12 @@ public:
         return mapped_queues[curr_qid].cs_state;
     }
 
+    /// True while PM4 processing is on the graphics ring (dispatches there are ordered against
+    /// draws; async-compute dispatches are not).
+    inline bool IsProcessingGfxQueue() const {
+        return curr_qid == GfxQueueId;
+    }
+
     struct AscQueueInfo {
         static constexpr size_t Pm4BufferSize = 1024;
         VAddr map_addr;

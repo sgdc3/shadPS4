@@ -328,6 +328,7 @@ void Rasterizer::DispatchDirect() {
     }
 
     const auto& cs = pipeline->GetStage(Shader::LogicalStage::Compute);
+
     if (ExecuteShaderHLE(cs, liverpool->regs, cs_program, *this)) {
         return;
     }
@@ -343,6 +344,24 @@ void Rasterizer::DispatchDirect() {
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
     cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
     DebugState.IncDispatch();
+
+    // The game's generic surface-fill compute just rewrote the whole memory behind a surface.
+    // When the fill carries a full write mask and a ZERO-alpha, non-zero colour it is a mid-frame
+    // OVERLAY RESET (LBP3 rewinds its overlay tint to neutral white and its distortion buffer to
+    // its neutral value between the passes that consume them): the aliased image must observe it
+    // before the next pass samples it, while the deferred-refresh path would only deliver it at
+    // the next frame's first use. Every destructive fill observed at the same sites - scratch
+    // zeroing (zero colour), opaque background prefills and whole-target clears (alpha 0xff) -
+    // falls outside this signature and keeps the deferred behaviour.
+    VAddr fill_address{};
+    u64 fill_size{};
+    u32 fill_mask{};
+    u32 fill_value{};
+    if (liverpool->IsProcessingGfxQueue() &&
+        MatchComputeSurfaceFill(pipeline, fill_address, fill_size, fill_mask, fill_value) &&
+        fill_mask == 0xffffffffU && (fill_value >> 24) == 0 && (fill_value & 0xffffffU) != 0) {
+        texture_cache.RefreshFillAlias(fill_address, fill_size);
+    }
 
     ResetBindings();
 }
@@ -538,6 +557,75 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline) {
     }
     dst_image.flags |= VideoCore::ImageFlagBits::GpuModified;
     dst_image.flags &= ~VideoCore::ImageFlagBits::Dirty;
+    return true;
+}
+
+// Recognizes the four-buffer flavour of the surface-fill compute (observed in LBP3, shader
+// 0x5c5e1be6e0ada38c): one raw 16-byte read buffer (fill value), one written formatted
+// dword-stride buffer covering a whole surface (one thread per dword, 64 threads per group), and
+// two single-dword formatted read buffers of parameters. It is the game's generic surface memset.
+// Pure matcher: on success returns the written surface's range; the dispatch itself always runs.
+bool Rasterizer::MatchComputeSurfaceFill(const Pipeline* pipeline, VAddr& out_address,
+                                         u64& out_size, u32& out_mask, u32& out_value) {
+    if (!pipeline->IsCompute()) {
+        return false;
+    }
+    const auto& cs_pgm = liverpool->GetCsRegs();
+    const auto& info = pipeline->GetStage(Shader::LogicalStage::Compute);
+    if (cs_pgm.num_thread_x.full != 64 || cs_pgm.num_thread_y.full != 1 ||
+        cs_pgm.num_thread_z.full != 1 || info.buffers.size() != 4 || !info.images.empty()) {
+        return false;
+    }
+
+    // Classify the four buffers; bail on anything outside the observed shape.
+    s32 value_idx = -1;
+    s32 surf_idx = -1;
+    for (s32 i = 0; i < static_cast<s32>(info.buffers.size()); ++i) {
+        const auto& desc = info.buffers[i];
+        if (desc.IsSpecial()) {
+            return false;
+        }
+        const AmdGpu::Buffer sharp = desc.GetSharp(info);
+        if (desc.is_written) {
+            if (!desc.is_formatted || surf_idx >= 0) {
+                return false;
+            }
+            surf_idx = i;
+        } else if (!desc.is_formatted) {
+            if (sharp.GetSize() != 16 || value_idx >= 0) {
+                return false;
+            }
+            value_idx = i;
+        } else if (sharp.GetSize() != 4) {
+            return false;
+        }
+    }
+    if (value_idx < 0 || surf_idx < 0) {
+        return false;
+    }
+
+    // One thread fills exactly one dword of the surface.
+    const AmdGpu::Buffer surf = info.buffers[surf_idx].GetSharp(info);
+    if (surf.GetStride() != 4 || u64(cs_pgm.dim_x) * 64ULL * 4ULL != surf.GetSize()) {
+        return false;
+    }
+    out_address = surf.base_address;
+    out_size = surf.GetSize();
+
+    // Decoded layout of the fill's parameters (measured 2026-08-29): the 16-byte raw buffer
+    // holds {dword_count, ...}; the two single-dword formatted read buffers are, in binding
+    // order, the write MASK (always 0xffffffff) and the packed FILL VALUE.
+    std::array<u32, 2> params{};
+    u32 pi = 0;
+    for (s32 i = 0; i < static_cast<s32>(info.buffers.size()); ++i) {
+        if (i == value_idx || i == surf_idx) {
+            continue;
+        }
+        const u32* pp = reinterpret_cast<const u32*>(info.buffers[i].GetSharp(info).base_address);
+        params[pi++] = pp ? *pp : 0;
+    }
+    out_mask = params[0];
+    out_value = params[1];
     return true;
 }
 

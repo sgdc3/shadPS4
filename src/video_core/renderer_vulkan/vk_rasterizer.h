@@ -47,6 +47,7 @@ public:
                       VAddr count_address);
 
     void DispatchDirect();
+
     void DispatchIndirect(VAddr address, u32 offset, u32 size);
 
     void ScopeMarkerBegin(const std::string_view& str, bool from_guest = false);
@@ -117,6 +118,8 @@ private:
     bool IsComputeMetaClear(const Pipeline* pipeline);
     bool IsComputeImageCopy(const Pipeline* pipeline);
     bool IsComputeImageClear(const Pipeline* pipeline);
+    bool MatchComputeSurfaceFill(const Pipeline* pipeline, VAddr& out_address, u64& out_size,
+                                 u32& out_mask, u32& out_value);
 
 private:
     friend class VideoCore::BufferCache;

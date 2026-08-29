@@ -157,6 +157,25 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
     });
 }
 
+void TextureCache::RefreshFillAlias(VAddr address, u64 size) {
+    std::scoped_lock lock{mutex};
+    const ImageId image_id = FindImageFromRange(address, size, false);
+    if (!image_id) {
+        return;
+    }
+    Image& image = slot_images[image_id];
+    if (image.info.guest_size != size || image.info.props.is_depth || image.info.num_samples > 1) {
+        return;
+    }
+    // The buffer now holds the surface's whole content; the guest-memory hash shortcut for
+    // MaybeCpuDirty would wrongly veto this GPU-side refresh, so drop that bit.
+    image.flags &= ~ImageFlagBits::MaybeCpuDirty;
+    image.flags |= ImageFlagBits::GpuDirty;
+    force_refresh_once = true;
+    RefreshImage(image);
+    force_refresh_once = false;
+}
+
 void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
     std::scoped_lock lock{mutex};
     ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
@@ -930,8 +949,8 @@ void TextureCache::RefreshImage(Image& image) {
     //   `frame_epoch > 1` check keeps titles that flip from the CPU side (epoch never advances)
     //   on the stock path instead of deferring their CPU updates forever.
     const u64 epoch = frame_epoch.load(std::memory_order_relaxed);
-    if (defer_rt_refresh && epoch > 1 && True(image.flags & ImageFlagBits::GpuModified) &&
-        image.last_gpu_write_epoch == epoch) {
+    if (defer_rt_refresh && !force_refresh_once && epoch > 1 &&
+        True(image.flags & ImageFlagBits::GpuModified) && image.last_gpu_write_epoch == epoch) {
         return;
     }
 

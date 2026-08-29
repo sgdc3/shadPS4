@@ -232,6 +232,11 @@ public:
         frame_epoch.fetch_add(1, std::memory_order_relaxed);
     }
 
+    /// The GPU rewrote the whole memory range of a surface with a fill dispatch; refresh the
+    /// exactly-aliased image from the buffer immediately, in stream, bypassing the mid-frame
+    /// refresh deferral for this one call.
+    void RefreshFillAlias(VAddr address, u64 size);
+
     template <typename Func>
     void ForEachImageInRegion(VAddr cpu_addr, size_t size, Func&& func) {
         using FuncReturn = typename std::invoke_result<Func, ImageId, Image&>::type;
@@ -356,6 +361,8 @@ private:
     // Bumped on the command-processor thread, read wherever an image is refreshed (including the
     // presenter's), so it has to be atomic even though the exact value only matters per frame.
     std::atomic<u64> frame_epoch = 1;
+    /// One-shot bypass of the mid-frame refresh deferral, set only by RefreshFillAlias.
+    bool force_refresh_once = false;
     Common::LeastRecentlyUsedCache<ImageId, u64> lru_cache;
     Common::LeastRecentlyUsedCache<u64, u64> sampler_lru_cache;
     bool readback_linear_images;
