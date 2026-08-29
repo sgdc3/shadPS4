@@ -3,26 +3,21 @@
 
 #pragma once
 
-#include <memory>
-
 namespace Common {
 
 template <class T>
 class Singleton {
 public:
     static T* Instance() {
-        if (!m_instance) {
-            m_instance = std::make_unique<T>();
-        }
-        return m_instance.get();
+        // A function-local static makes a concurrent first call safe; the lazy unique_ptr let
+        // two callers construct it and one keep the destroyed copy.
+        static T instance;
+        return &instance;
     }
 
 protected:
     Singleton();
     ~Singleton();
-
-private:
-    static inline std::unique_ptr<T> m_instance{};
 };
 
 } // namespace Common
