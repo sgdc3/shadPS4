@@ -93,6 +93,7 @@ struct GuestSocket {
     std::atomic<s64> accept_timeout_us{0};  // SO_ACCEPTTIMEO
     std::atomic<bool> connected{false};     // also set while connecting
     std::atomic<bool> listening{false};
+    bool denied_raw = false; // see SocketCreateDeniedRaw
 
     std::mutex attr_mutex;
     SocketAttributes attributes;
@@ -630,6 +631,18 @@ NetResult SocketCreate(int family, int type, int protocol) {
     return g_objects.Insert(std::move(s));
 }
 
+NetResult SocketCreateDeniedRaw(int family) {
+    // A plain datagram descriptor keeps epoll and select working on it.
+    Error e;
+    const Host::NativeSocket native = Host::CreateSocket(family, SOCK_DGRAM, IPPROTO_UDP, &e);
+    if (native == Host::InvalidSocket) {
+        return NetResult::Fail(e);
+    }
+    auto s = std::make_shared<GuestSocket>(native, SOCK_RAW, g_next_generation.fetch_add(1));
+    s->denied_raw = true;
+    return g_objects.Insert(std::move(s));
+}
+
 NetResult SocketCreatePair(int family, int type, int protocol, s32 ids[2]) {
     Host::NativeSocket natives[2];
     if (const Error e = Host::CreateSocketPair(family, type, protocol, natives); e != Error::Ok) {
@@ -789,6 +802,9 @@ NetResult SocketSendTo(s32 id, const void* buf, size_t len, int host_flags, bool
     if (s->IsP2P()) {
         return NetResult::Fail(Error::Inval); // use P2PSocketSendTo
     }
+    if (s->denied_raw) {
+        return NetResult::Fail(Error::Acces);
+    }
     if (s->type != SOCK_STREAM) {
         // UDP/RAW sends never block on PS4. A full buffer silently drops the datagram.
         if (ConsumePendingAbort(*s, Side::Send)) {
@@ -824,6 +840,9 @@ NetResult SocketRecvFrom(s32 id, void* buf, size_t len, int host_flags, bool don
     }
     if (s->IsP2P()) {
         return NetResult::Fail(Error::Inval); // use P2PSocketRecvFrom
+    }
+    if (s->denied_raw) {
+        return NetResult::Fail(Error::WouldBlock); // nothing ever arrives, don't block forever
     }
     const bool blocking = !dontwait && !s->nonblocking;
     // Host socket is non-blocking, so MSG_WAITALL is handled here.
@@ -884,6 +903,9 @@ NetResult SocketSetHostOption(s32 id, int level, int name, const void* value, so
     }
     if (s->IsP2P()) {
         return NetResult::Fail(Error::NoProtoOpt);
+    }
+    if (s->denied_raw && level == IPPROTO_IP && name == IP_HDRINCL) {
+        return NetResult::Ok(); // only exists on a real raw socket
     }
     return FromError(setsockopt(s->native, level, name, static_cast<const char*>(value), len) == 0
                          ? Error::Ok
