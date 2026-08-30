@@ -52,6 +52,8 @@ std::vector<s32> ListSockets();
 s32 ToOrbisReturn(NetResult result);
 
 NetResult SocketCreate(int family, int type, int protocol);
+// Stands in for a raw socket the host refused: it never receives and fails every send.
+NetResult SocketCreateDeniedRaw(int family);
 NetResult SocketCreatePair(int family, int type, int protocol, s32 ids[2]);
 NetResult SocketBind(s32 id, const sockaddr* addr, socklen_t len);
 NetResult SocketListen(s32 id, int backlog);
