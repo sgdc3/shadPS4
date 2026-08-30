@@ -10,6 +10,7 @@
 #include "video_core/texture_cache/image_info.h"
 #include "video_core/texture_cache/image_view.h"
 
+#include <chrono>
 #include <deque>
 #include <optional>
 #include <boost/container/small_vector.hpp>
@@ -175,6 +176,9 @@ public:
     // Bumped whenever the depth/stencil contents may have been written (depth-target binds,
     // attachment clears); the staged stencil copy refreshes when it falls behind.
     u64 ds_write_stamp{};
+    // When this image was last downloaded back to guest memory; a download repeating
+    // within a frame marks the image as a per-frame streaming target.
+    std::chrono::steady_clock::time_point last_download_time{};
 
     // Resource state tracking
     vk::ImageUsageFlags usage_flags;

@@ -65,8 +65,17 @@ TextureCache::~TextureCache() = default;
 
 void TextureCache::ProcessDownloadImages() {
     std::unique_lock lk{download_images_mutex};
+    const auto now = std::chrono::steady_clock::now();
     for (const ImageId image_id : download_images) {
-        DownloadImageMemory(image_id, true);
+        Image& image = slot_images[image_id];
+        // The synchronous path drains the GPU so the data reaches guest memory before
+        // the EOS/EOP fence signalled right after this call. Paying that once for a
+        // cold download (a photo capture, a one-off readback) is fine, but an image
+        // the GPU regenerates every frame would cost a full pipeline drain per frame;
+        // write those back at fence completion instead, like the rest of the cache.
+        const bool streaming = now - image.last_download_time < std::chrono::milliseconds(100);
+        image.last_download_time = now;
+        DownloadImageMemory(image_id, !streaming);
     }
     download_images.clear();
 }
