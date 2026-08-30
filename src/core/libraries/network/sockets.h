@@ -136,6 +136,28 @@ struct PosixSocket : public Socket {
     }
 };
 
+/// Stand-in for a raw socket the host refused to open. Linux hands AF_INET/SOCK_RAW only to a
+/// process holding CAP_NET_RAW, which an ordinary build does not, and failing the call there is
+/// worse than useless: a game that opens a raw socket only to ping its own server reads the
+/// failure as "there is no network" and never goes online at all. So the guest gets a socket that
+/// exists, binds and polls like any other, and quietly drops everything it is asked to send -
+/// the same shape as the raw socket it gets on Windows, where creating one succeeds and only the
+/// sending fails. Underneath is an ordinary datagram socket, kept solely so that epoll and select
+/// have a real descriptor to watch.
+struct DeniedRawSocket : public PosixSocket {
+    explicit DeniedRawSocket(int domain) : PosixSocket(domain, ORBIS_NET_SOCK_DGRAM, 0) {
+        // Report the type the guest asked for, not the placeholder's.
+        Socket::socket_type = ORBIS_NET_SOCK_RAW;
+        PosixSocket::socket_type = ORBIS_NET_SOCK_RAW;
+    }
+    int SetSocketOptions(int level, int optname, const void* optval, u32 optlen) override;
+    int SendMessage(const OrbisNetMsghdr* msg, int flags) override;
+    int SendPacket(const void* msg, u32 len, int flags, const OrbisNetSockaddr* to,
+                   u32 tolen) override;
+    int ReceiveMessage(OrbisNetMsghdr* msg, int flags) override;
+    int ReceivePacket(void* buf, u32 len, int flags, OrbisNetSockaddr* from, u32* fromlen) override;
+};
+
 class P2PPort;
 
 struct P2PSocket : public Socket {
