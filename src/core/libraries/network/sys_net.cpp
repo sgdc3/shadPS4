@@ -221,6 +221,13 @@ int PS4_SYSV_ABI sys_socketex(const char* name, int family, int type, int protoc
         [[fallthrough]];
     case ORBIS_NET_SOCK_RAW:
         socket = std::make_shared<PosixSocket>(family, type, protocol);
+        if (type == ORBIS_NET_SOCK_RAW && !socket->IsValid()) {
+            // The console never refuses a raw socket, so hand out a DeniedRawSocket instead of
+            // failing.
+            LOG_WARNING(Lib_Net, "host refused a raw socket; giving {} one that drops its sends",
+                        std::string(sname));
+            socket = std::make_shared<DeniedRawSocket>(family);
+        }
         break;
     case ORBIS_NET_SOCK_DGRAM_P2P:
     case ORBIS_NET_SOCK_STREAM_P2P:
@@ -230,6 +237,7 @@ int PS4_SYSV_ABI sys_socketex(const char* name, int family, int type, int protoc
         UNREACHABLE_MSG("Unknown type {}", type);
     }
     if (!socket->IsValid()) {
+        LOG_ERROR(Lib_Net, "host refused the socket for {}", std::string(sname));
         *Libraries::Kernel::__Error() = ORBIS_NET_EPROTONOSUPPORT;
         return -1;
     }
