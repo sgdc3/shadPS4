@@ -713,4 +713,35 @@ int PosixSocket::fstat(Libraries::Kernel::OrbisKernelStat* sb) {
 #endif
 }
 
+int DeniedRawSocket::SetSocketOptions(int level, int optname, const void* optval, u32 optlen) {
+    // IP_HDRINCL only exists on a raw socket; accept it and drop it.
+    if (level == ORBIS_NET_IPPROTO_IP && optname == ORBIS_NET_IP_HDRINCL) {
+        return ORBIS_OK;
+    }
+    return PosixSocket::SetSocketOptions(level, optname, optval, optlen);
+}
+
+int DeniedRawSocket::SendMessage(const OrbisNetMsghdr* msg, int flags) {
+    *Libraries::Kernel::__Error() = ORBIS_NET_EACCES;
+    return -1;
+}
+
+int DeniedRawSocket::SendPacket(const void* msg, u32 len, int flags, const OrbisNetSockaddr* to,
+                                u32 tolen) {
+    *Libraries::Kernel::__Error() = ORBIS_NET_EACCES;
+    return -1;
+}
+
+int DeniedRawSocket::ReceiveMessage(OrbisNetMsghdr* msg, int flags) {
+    // Nothing ever arrives; report EWOULDBLOCK rather than block forever.
+    *Libraries::Kernel::__Error() = ORBIS_NET_EWOULDBLOCK;
+    return -1;
+}
+
+int DeniedRawSocket::ReceivePacket(void* buf, u32 len, int flags, OrbisNetSockaddr* from,
+                                   u32* fromlen) {
+    *Libraries::Kernel::__Error() = ORBIS_NET_EWOULDBLOCK;
+    return -1;
+}
+
 } // namespace Libraries::Net
