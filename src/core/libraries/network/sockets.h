@@ -137,6 +137,23 @@ struct PosixSocket : public Socket {
     }
 };
 
+/// Stand-in for a raw socket the host refused (Linux needs CAP_NET_RAW). It binds and polls
+/// like any socket over a plain datagram descriptor, but drops what it sends and never
+/// receives, the shape a raw socket has on Windows, where only sending fails.
+struct DeniedRawSocket : public PosixSocket {
+    explicit DeniedRawSocket(int domain) : PosixSocket(domain, ORBIS_NET_SOCK_DGRAM, 0) {
+        // Report the type the guest asked for, not the placeholder's.
+        Socket::socket_type = ORBIS_NET_SOCK_RAW;
+        PosixSocket::socket_type = ORBIS_NET_SOCK_RAW;
+    }
+    int SetSocketOptions(int level, int optname, const void* optval, u32 optlen) override;
+    int SendMessage(const OrbisNetMsghdr* msg, int flags) override;
+    int SendPacket(const void* msg, u32 len, int flags, const OrbisNetSockaddr* to,
+                   u32 tolen) override;
+    int ReceiveMessage(OrbisNetMsghdr* msg, int flags) override;
+    int ReceivePacket(void* buf, u32 len, int flags, OrbisNetSockaddr* from, u32* fromlen) override;
+};
+
 class P2PPort;
 
 struct P2PSocket : public Socket {
