@@ -2666,8 +2666,15 @@ static OrbisNetId sceNetSocketImpl(const char* name, s32 family, s32 type, s32 p
     if (kind->p2p && !EnsureP2PTransport()) {
         return SetErrno(ORBIS_NET_EADDRINUSE); // P2P port taken
     }
-    const auto r = kind->p2p ? Core::Net::P2PSocketCreate(kind->family, kind->type == SOCK_STREAM)
-                             : Core::Net::SocketCreate(kind->family, kind->type, kind->protocol);
+    auto r = kind->p2p ? Core::Net::P2PSocketCreate(kind->family, kind->type == SOCK_STREAM)
+                       : Core::Net::SocketCreate(kind->family, kind->type, kind->protocol);
+    if (!kind->p2p && kind->type == SOCK_RAW &&
+        (r.error == Error::Perm || r.error == Error::Acces)) {
+        // The console never refuses a raw socket, so titles take the failure as no network.
+        LOG_WARNING(Lib_Net, "host refused a raw socket, giving '{}' a stand-in that cannot send",
+                    name != nullptr ? name : "");
+        r = Core::Net::SocketCreateDeniedRaw(kind->family);
+    }
     if (r.error == Error::Ok && name != nullptr) {
         Core::Net::SocketUpdateAttributes(static_cast<s32>(r.value),
                                           [&](Core::Net::SocketAttributes& a) {
