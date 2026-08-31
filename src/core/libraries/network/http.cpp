@@ -24,6 +24,7 @@
 #include "common/path_util.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/error_codes.h"
+#include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/kernel/process.h"
 #include "core/libraries/libs.h"
@@ -130,7 +131,7 @@ struct HttpState {
     bool inited = false;
     int next_ctx_id = 0;
     int next_obj_id = 0;
-    bool default_accept_encoding_gzip = true; // Library-wide default for new templates
+    bool default_accept_encoding_gzip = false;
     std::unordered_set<int> active_contexts;
     // Contexts where sceHttpsLoadCert was called. We can't actually parse the
     // PS4 cert blobs, but we use this as a signal that
@@ -749,10 +750,16 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
 
         // We always handle redirects manually per PS4 rules
         cli.set_follow_location(false);
-
 #ifdef CPPHTTPLIB_ZLIB_SUPPORT
         cli.set_decompress(plan.settings.inflate_gzip);
 #endif
+        bool game_set_accept_encoding = false;
+        for (const auto& [k, v] : plan.headers) {
+            if (HeaderNameMatches(k, "Accept-Encoding")) {
+                game_set_accept_encoding = true;
+                break;
+            }
+        }
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
         if (plan.scheme == "https") {
@@ -778,17 +785,8 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
         for (const auto& [k, v] : plan.headers) {
             headers.emplace(k, v);
         }
-        if (plan.settings.accept_encoding_gzip) {
-            bool already_set = false;
-            for (const auto& [k, v] : plan.headers) {
-                if (HeaderNameMatches(k, "Accept-Encoding")) {
-                    already_set = true;
-                    break;
-                }
-            }
-            if (!already_set) {
-                headers.emplace("Accept-Encoding", "gzip");
-            }
+        if (plan.settings.accept_encoding_gzip && !game_set_accept_encoding) {
+            headers.emplace("Accept-Encoding", "gzip");
         }
 
         const char* body_ptr =
@@ -953,6 +951,26 @@ static bool HeaderNameMatches(std::string_view a, std::string_view b) {
         }
     }
     return true;
+}
+
+static std::string GetLibhttpSystemVersionString() {
+    u32 sw_hex = CURRENT_FIRMWARE_VERSION;
+    Libraries::Kernel::SwVersionStruct sw{};
+    sw.struct_size = sizeof(sw);
+    if (Libraries::Kernel::sceKernelGetSystemSwVersion(&sw) == ORBIS_OK) {
+        sw_hex = sw.hex_representation;
+    }
+    const u32 major = ((sw_hex >> 0x18) & 0xf) + ((sw_hex >> 0x1c) * 10);
+    const u32 minor = ((sw_hex >> 0x10) & 0xf) + (((sw_hex >> 0x14) & 0xf) * 10);
+    return fmt::format("{}.{:02}", major, minor);
+}
+
+static std::string BuildLibhttpUserAgent(std::string_view app_user_agent) {
+    const std::string libhttp_tag = fmt::format("libhttp/{}", GetLibhttpSystemVersionString());
+    if (app_user_agent.empty()) {
+        return fmt::format("{} (PlayStation 4)", libhttp_tag);
+    }
+    return fmt::format("{} {} (PlayStation 4)", app_user_agent, libhttp_tag);
 }
 
 // Resolve the headers vector for a template/connection/request id. Returns
@@ -1367,7 +1385,7 @@ int PS4_SYSV_ABI sceHttpCreateTemplate(int libhttpCtxId, const char* userAgent, 
     const int tmpl_id = ++g_state.next_obj_id;
     HttpTemplate tmpl;
     tmpl.ctx_id = libhttpCtxId;
-    tmpl.user_agent = userAgent ? userAgent : "";
+    tmpl.user_agent = BuildLibhttpUserAgent(userAgent ? userAgent : "");
     tmpl.http_version = httpVer;
     tmpl.auto_proxy_conf = isAutoProxyConf;
     tmpl.settings.accept_encoding_gzip = g_state.default_accept_encoding_gzip;
@@ -1529,6 +1547,7 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
         }
         plan.path = ExtractPathFromUrl(req.url);
         plan.settings = req.settings;
+        std::string tmpl_user_agent;
         if (auto conn_it = g_state.connections.find(req.conn_id);
             conn_it != g_state.connections.end()) {
             plan.scheme = conn_it->second.scheme;
@@ -1538,6 +1557,7 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
             if (auto tmpl_it = g_state.templates.find(conn_it->second.tmpl_id);
                 tmpl_it != g_state.templates.end()) {
                 plan.headers = tmpl_it->second.headers;
+                tmpl_user_agent = tmpl_it->second.user_agent;
                 // Check if the owning context loaded custom CAs - if so the
                 // worker will bypass TLS verification.
                 plan.ctx_has_loaded_certs =
@@ -1549,6 +1569,13 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
         }
         for (const auto& h : req.headers) {
             plan.headers.push_back(h);
+        }
+        // The template's User-Agent is used unless a header explicitly overrides it
+        if (std::none_of(plan.headers.begin(), plan.headers.end(),
+                         [](const auto& h) { return HeaderNameMatches(h.first, "User-Agent"); })) {
+            plan.headers.emplace_back("User-Agent", !tmpl_user_agent.empty()
+                                                        ? tmpl_user_agent
+                                                        : BuildLibhttpUserAgent(""));
         }
         // Pull Content-Type out of headers
         for (const auto& [k, v] : plan.headers) {
