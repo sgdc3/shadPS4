@@ -548,6 +548,7 @@ set(COMMON_TEST_SOURCES
 
     # Tests
     common/test_io_file_unlink.cpp
+    common/test_shared_first_mutex.cpp
 )
 
 add_executable(shadps4_common_test ${COMMON_TEST_SOURCES})
