@@ -11,8 +11,10 @@
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
 namespace Serialization {
-/* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 6u;
+/* You should increment versions below once corresponding serialization scheme is changed.
+ * ShaderBinaryVersion also covers the emitted SPIR-V: cached binaries are keyed by the guest
+ * program hash alone, so a codegen change needs a bump to reach a warm cache. */
+static constexpr u32 ShaderBinaryVersion = 14u;
 static constexpr u32 ShaderMetaVersion = 6u;
 static constexpr u32 PipelineKeyVersion = 3u;
 } // namespace Serialization
