@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: 2026 shadPS4 Emulator Project
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+name: Publish lbp3-compat release
+
+on:
+  workflow_run:
+    workflows: [Build and Release]
+    types: [completed]
+    branches: [lbp3-compat]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: lbp3-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.repository == 'sgdc3/shadPS4' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+    - name: Skip if the branch has moved on
+      id: check
+      run: |
+        tip=$(gh api "repos/$GH_REPO/commits/lbp3-compat" --jq .sha)
+        if [ "$tip" != "$SHA" ]; then
+          echo "lbp3-compat is at $tip, not $SHA; skipping"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Download build artifacts
+      if: steps.check.outputs.skip != 'true'
+      uses: actions/download-artifact@v8
+      with:
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ github.token }}
+        path: ./artifacts
+
+    - name: Package
+      if: steps.check.outputs.skip != 'true'
+      run: |
+        mkdir out
+        pack() {
+          local dir=$(ls -d ./artifacts/$1-* 2>/dev/null | head -n 1)
+          if [ -z "$dir" ]; then
+            echo "::error::missing artifact $1"
+            exit 1
+          fi
+          chmod -R a+x "$dir"
+          (cd "$dir" && zip -r "$GITHUB_WORKSPACE/out/$2.zip" .)
+        }
+        pack shadps4-win64-sdl shadps4-lbp3-win64
+        pack shadps4-linux-sdl shadps4-lbp3-linux-appimage
+        pack shadps4-ubuntu64 shadps4-lbp3-ubuntu64
+        pack shadps4-macos-sdl shadps4-lbp3-macos
+        ls -la out
+
+    - name: Publish
+      if: steps.check.outputs.skip != 'true'
+      run: |
+        short=${SHA::7}
+        date=$(date -u +%Y-%m-%d)
+        tag="lbp3-$short"
+        # One release per build, so earlier builds survive a force-push of the branch.
+        if gh release view "$tag" > /dev/null 2>&1; then
+          gh release upload "$tag" out/*.zip --clobber
+          gh release edit "$tag" --latest
+        else
+          gh release create "$tag" out/*.zip \
+            --target "$SHA" \
+            --title "lbp3-compat $date $short" \
+            --notes "Built from [\`$short\`](https://github.com/$GH_REPO/commit/$SHA) on \`lbp3-compat\`." \
+            --latest
+        fi
