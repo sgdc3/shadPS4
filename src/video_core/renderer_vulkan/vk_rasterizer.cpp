@@ -583,6 +583,27 @@ void Rasterizer::ResetBindings(bool is_compute) {
     needs_barrier = false;
 }
 
+// Returns the guest buffers of a shader that binds exactly two of them. Special buffers, like the
+// flat buffer holding user data, are not part of the guest program's resources.
+static std::optional<std::array<const Shader::BufferResource*, 2>> GetTwoGuestBuffers(
+    const Shader::Info& info) {
+    std::array<const Shader::BufferResource*, 2> buffers{};
+    u32 count = 0;
+    for (const auto& desc : info.buffers) {
+        if (desc.IsSpecial()) {
+            continue;
+        }
+        if (count == buffers.size()) {
+            return std::nullopt;
+        }
+        buffers[count++] = &desc;
+    }
+    if (count != buffers.size()) {
+        return std::nullopt;
+    }
+    return buffers;
+}
+
 bool Rasterizer::IsComputeMetaClear(const Pipeline* pipeline) {
     if (!pipeline->IsCompute()) {
         return false;
@@ -628,13 +649,14 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline) {
     // Ensure shader only has 2 bound buffers
     const auto& cs_pgm = liverpool->GetCsRegs();
     const auto& info = pipeline->GetStage(Shader::SwStage::Compute);
-    if (cs_pgm.num_thread_x.full != 64 || info.buffers.size() != 2 || !info.images.empty()) {
+    const auto guest_buffers = GetTwoGuestBuffers(info);
+    if (cs_pgm.num_thread_x.full != 64 || !guest_buffers || !info.images.empty()) {
         return false;
     }
 
     // Those 2 buffers must both be formatted. One must be source and another destination.
-    const auto& desc0 = info.buffers[0];
-    const auto& desc1 = info.buffers[1];
+    const auto& desc0 = *(*guest_buffers)[0];
+    const auto& desc1 = *(*guest_buffers)[1];
     if (!desc0.is_formatted || !desc1.is_formatted || desc0.is_written == desc1.is_written) {
         return false;
     }
@@ -749,13 +771,14 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     // Ensure shader only has 2 bound buffers
     const auto& cs_pgm = liverpool->GetCsRegs();
     const auto& info = pipeline->GetStage(Shader::SwStage::Compute);
-    if (cs_pgm.num_thread_x.full != 64 || info.buffers.size() != 2 || !info.images.empty()) {
+    const auto guest_buffers = GetTwoGuestBuffers(info);
+    if (cs_pgm.num_thread_x.full != 64 || !guest_buffers || !info.images.empty()) {
         return false;
     }
 
     // From those 2 buffers, first must hold the clear vector and second the image being cleared
-    const auto& desc0 = info.buffers[0];
-    const auto& desc1 = info.buffers[1];
+    const auto& desc0 = *(*guest_buffers)[0];
+    const auto& desc1 = *(*guest_buffers)[1];
     if (desc0.is_formatted || !desc1.is_formatted || desc0.is_written || !desc1.is_written) {
         return false;
     }
