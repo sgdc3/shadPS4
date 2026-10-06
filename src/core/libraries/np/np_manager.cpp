@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <deque>
@@ -830,6 +831,28 @@ static void QueueNpStateEvent(Libraries::UserService::OrbisUserServiceUserId use
     g_np_state_events.emplace_back(event);
 }
 
+// Users are usually signed in before the title registers its state callbacks, and their
+// SignedIn event may already have been dispatched, so report the current state again.
+static void QueueSignedInStates() {
+    if (!g_shadnet_enabled) {
+        return;
+    }
+    for (const User* u : UserManagement.GetLoggedInUsers()) {
+        if (u == nullptr || !Libraries::Np::NpHandler::GetInstance().IsPsnSignedIn(u->user_id)) {
+            continue;
+        }
+        {
+            std::scoped_lock lk{g_np_state_events_mutex};
+            if (std::any_of(
+                    g_np_state_events.begin(), g_np_state_events.end(),
+                    [&](const PendingNpStateEvent& e) { return e.user_id == u->user_id; })) {
+                continue;
+            }
+        }
+        QueueNpStateEvent(u->user_id, OrbisNpState::SignedIn);
+    }
+}
+
 void NotifyNpStateFromUserServiceEvent(Libraries::UserService::OrbisUserServiceEventType event_type,
                                        Libraries::UserService::OrbisUserServiceUserId user_id) {
     switch (event_type) {
@@ -983,14 +1006,17 @@ s32 PS4_SYSV_ABI sceNpRegisterStateCallback(OrbisNpStateCallback callback, void*
         return ORBIS_NP_ERROR_INVALID_ARGUMENT;
     }
 
-    std::scoped_lock lk{g_np_state_callbacks_mutex};
-    if (LegacyNpStateCb.func != nullptr) {
-        return ORBIS_NP_ERROR_CALLBACK_ALREADY_REGISTERED;
-    }
+    {
+        std::scoped_lock lk{g_np_state_callbacks_mutex};
+        if (LegacyNpStateCb.func != nullptr) {
+            return ORBIS_NP_ERROR_CALLBACK_ALREADY_REGISTERED;
+        }
 
-    LOG_INFO(Lib_NpManager, "called, userdata = {}", userdata);
-    LegacyNpStateCb.func = callback;
-    LegacyNpStateCb.userdata = userdata;
+        LOG_INFO(Lib_NpManager, "called, userdata = {}", userdata);
+        LegacyNpStateCb.func = callback;
+        LegacyNpStateCb.userdata = userdata;
+    }
+    QueueSignedInStates();
     return ORBIS_OK;
 }
 
@@ -1006,7 +1032,11 @@ s32 PS4_SYSV_ABI sceNpUnregisterStateCallback() {
 
 s32 PS4_SYSV_ABI sceNpRegisterStateCallbackA(OrbisNpStateCallbackA callback, void* userdata) {
     LOG_INFO(Lib_NpManager, "called, userdata = {}", userdata);
-    return RegisterStateCallbackA(callback, userdata);
+    const s32 result = RegisterStateCallbackA(callback, userdata);
+    if (result > 0) {
+        QueueSignedInStates();
+    }
+    return result;
 }
 
 s32 PS4_SYSV_ABI sceNpUnregisterStateCallbackA(s32 callback_id) {
@@ -1049,9 +1079,12 @@ s32 PS4_SYSV_ABI sceNpUnregisterNpReachabilityStateCallback() {
 s32 PS4_SYSV_ABI sceNpRegisterStateCallbackForToolkit(OrbisNpStateCallbackForNpToolkit callback,
                                                       void* userdata) {
     LOG_ERROR(Lib_NpManager, "(STUBBED) called");
-    std::scoped_lock lk{g_np_state_callbacks_mutex};
-    NpStateCbForNp.func = callback;
-    NpStateCbForNp.userdata = userdata;
+    {
+        std::scoped_lock lk{g_np_state_callbacks_mutex};
+        NpStateCbForNp.func = callback;
+        NpStateCbForNp.userdata = userdata;
+    }
+    QueueSignedInStates();
     return ORBIS_OK;
 }
 
