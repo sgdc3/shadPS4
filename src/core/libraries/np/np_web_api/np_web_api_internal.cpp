@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <magic_enum/magic_enum.hpp>
+#include <nlohmann/json.hpp>
 #include "common/elf_info.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/kernel/process.h"
@@ -667,6 +668,53 @@ s32 addMultipartPart(s64 requestId, const OrbisNpWebApiMultipartPartParameter* p
     return ORBIS_OK;
 }
 
+// Hotfix: shadNet only reports a friend's online ID inside "user", but titles built against the
+// legacy userProfile API ask for a top-level "onlineId" and drop every entry without it.
+static void fillLegacyFriendOnlineIds(OrbisNpWebApiRequest* request) {
+    const std::string& path = request->userPath;
+    const size_t fields = path.find("fields=");
+    if (request->userApiGroup != "userProfile" || path.find("/friendList") == std::string::npos ||
+        fields == std::string::npos) {
+        return;
+    }
+    const std::string list =
+        "," + path.substr(fields + 7, path.find('&', fields) - fields - 7) + ",";
+    s32 status = 0;
+    if (list.find(",onlineId,") == std::string::npos ||
+        Libraries::Http::sceHttpGetStatusCode(request->http_request_id, &status) < 0 ||
+        status != 200) {
+        return;
+    }
+
+    std::string body;
+    char buf[4096];
+    for (;;) {
+        const s32 n = Libraries::Http::sceHttpReadData(request->http_request_id, buf, sizeof(buf));
+        if (n <= 0)
+            break;
+        body.append(buf, static_cast<size_t>(n));
+    }
+
+    auto json = nlohmann::ordered_json::parse(body, nullptr, false);
+    if (!json.is_discarded() && json.contains("friendList") && json["friendList"].is_array()) {
+        for (auto& entry : json["friendList"]) {
+            if (!entry.is_object() || entry.contains("onlineId") || !entry.contains("npId") ||
+                !entry["npId"].is_string()) {
+                continue;
+            }
+            OrbisNpId np_id{};
+            sceNpWebApiUtilityParseNpId(entry["npId"].get_ref<const std::string&>().c_str(),
+                                        &np_id);
+            entry["onlineId"] = std::string(np_id.handle.data,
+                                            strnlen(np_id.handle.data, sizeof(np_id.handle.data)));
+        }
+        body = json.dump();
+    }
+    request->data = std::move(body);
+    request->remainingData = request->data.size();
+    request->readOffset = 0;
+}
+
 s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s8 flag,
                 OrbisNpWebApiResponseInformationOption* pRespInfoOption) {
     OrbisNpWebApiContext* context = findAndValidateContext(requestId >> 0x30);
@@ -915,6 +963,8 @@ s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s
     LOG_INFO(Lib_NpWebApi, "requestId={:#x} apiGroup='{}' path='{}' method={} httpReqId={}",
              requestId, request->userApiGroup, request->userPath,
              magic_enum::enum_name(request->userMethod), request->http_request_id);
+
+    fillLegacyFriendOnlineIds(request);
 
     s32 sendResult = ORBIS_OK;
     if (flag != 0) {
@@ -1965,7 +2015,7 @@ u64 PS4_SYSV_ABI copyRequestData(OrbisNpWebApiRequest* request, void* data, u64 
             if (remainingSize < size) {
                 size = remainingSize;
             }
-            memcpy(data, request->data + request->readOffset, size);
+            memcpy(data, request->data.data() + request->readOffset, size);
             request->readOffset += static_cast<u32>(size);
             readSize = size;
         }
