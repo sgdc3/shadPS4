@@ -608,7 +608,7 @@ void DispatchPeerActivatedEvent(s32 conn_id) {
             ? owner_it->second.owner_npid
             : OrbisNpId{};
     for (auto& [cid, ctx] : NpHandler::GetInstance().GetSignalingState().contexts) {
-        if (cid == owner_ctx || !ctx.active) {
+        if (!ctx.active) {
             continue;
         }
         if (std::memcmp(&ctx.owner_npid, &local_npid, sizeof(local_npid)) == 0) {
