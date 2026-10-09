@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <magic_enum/magic_enum.hpp>
+#include <nlohmann/json.hpp>
 #include "common/elf_info.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/kernel/process.h"
@@ -676,6 +677,62 @@ static std::string stripTrailingSlash(const std::string& path) {
     return path;
 }
 
+static std::string readResponseBody(s32 http_request_id) {
+    std::string body;
+    char buf[4096];
+    for (;;) {
+        const s32 n = Libraries::Http::sceHttpReadData(http_request_id, buf, sizeof(buf));
+        if (n <= 0)
+            break;
+        body.append(buf, static_cast<size_t>(n));
+    }
+    return body;
+}
+
+static void replaceResponseBody(OrbisNpWebApiRequest* request, std::string body) {
+    request->data = std::move(body);
+    request->remainingData = request->data.size();
+    request->readOffset = 0;
+}
+
+// Hotfix: titles built before account IDs existed read sessionCreator as an online ID string,
+// while shadNet always sends a user object.
+static void fillLegacySessionCreator(OrbisNpWebApiRequest* request) {
+    const std::string path = request->userPath.substr(0, request->userPath.find('?'));
+    s32 status = 0;
+    if (g_sdk_ver >= Common::ElfInfo::FW_450 ||
+        request->userMethod != ORBIS_NP_WEBAPI_HTTP_METHOD_GET ||
+        (path.find("/invitations/") == std::string::npos &&
+         path.find("/sessions/") == std::string::npos) ||
+        path.find("Data") != std::string::npos ||
+        Libraries::Http::sceHttpGetStatusCode(request->http_request_id, &status) < 0 ||
+        status != 200) {
+        return;
+    }
+
+    std::string body = readResponseBody(request->http_request_id);
+    auto json = nlohmann::ordered_json::parse(body, nullptr, false);
+    if (!json.is_discarded() && json.is_object()) {
+        const auto flatten = [](nlohmann::ordered_json& node) {
+            if (!node.is_object() || !node.contains("sessionCreator")) {
+                return;
+            }
+            auto& creator = node["sessionCreator"];
+            if (creator.is_object() && creator.contains("onlineId") &&
+                creator["onlineId"].is_string()) {
+                const std::string online_id = creator["onlineId"].get<std::string>();
+                creator = online_id;
+            }
+        };
+        flatten(json);
+        if (json.contains("session")) {
+            flatten(json["session"]);
+        }
+        body = json.dump();
+    }
+    replaceResponseBody(request, std::move(body));
+}
+
 s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s8 flag,
                 OrbisNpWebApiResponseInformationOption* pRespInfoOption) {
     OrbisNpWebApiContext* context = findAndValidateContext(requestId >> 0x30);
@@ -924,6 +981,8 @@ s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s
     LOG_INFO(Lib_NpWebApi, "requestId={:#x} apiGroup='{}' path='{}' method={} httpReqId={}",
              requestId, request->userApiGroup, request->userPath,
              magic_enum::enum_name(request->userMethod), request->http_request_id);
+
+    fillLegacySessionCreator(request);
 
     s32 sendResult = ORBIS_OK;
     if (flag != 0) {
@@ -1974,7 +2033,7 @@ u64 PS4_SYSV_ABI copyRequestData(OrbisNpWebApiRequest* request, void* data, u64 
             if (remainingSize < size) {
                 size = remainingSize;
             }
-            memcpy(data, request->data + request->readOffset, size);
+            memcpy(data, request->data.data() + request->readOffset, size);
             request->readOffset += static_cast<u32>(size);
             readSize = size;
         }
