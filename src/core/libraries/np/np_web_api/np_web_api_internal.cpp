@@ -668,6 +668,15 @@ s32 addMultipartPart(s64 requestId, const OrbisNpWebApiMultipartPartParameter* p
     return ORBIS_OK;
 }
 
+// Hotfix: shadNet does not route a path that ends with a slash, which some titles send.
+static std::string stripTrailingSlash(const std::string& path) {
+    const size_t end = std::min(path.find('?'), path.size());
+    if (end > 1 && path[end - 1] == '/') {
+        return path.substr(0, end - 1) + path.substr(end);
+    }
+    return path;
+}
+
 // Hotfix: shadNet only reports a friend's online ID inside "user", but titles built against the
 // legacy userProfile API ask for a top-level "onlineId" and drop every entry without it.
 static void fillLegacyFriendOnlineIds(OrbisNpWebApiRequest* request) {
@@ -883,7 +892,7 @@ s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s
             releaseContext(context);
             return ORBIS_NP_WEBAPI_ERROR_INVALID_ARGUMENT;
         }
-        const std::string full_url = base_url + request->userPath;
+        const std::string full_url = base_url + stripTrailingSlash(request->userPath);
         const int req_id = Libraries::Http::sceHttpCreateRequestWithURL(
             conn_id, sceMethod, full_url.c_str(), request->userContentLength);
         if (req_id < 0) {
