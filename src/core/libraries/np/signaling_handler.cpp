@@ -315,8 +315,14 @@ s32 StatusFromState(NpSignaling::ConnState state) {
 
 void SetTransportStateLocked(NpSignaling::PeerTransport& transport,
                              NpSignaling::ConnState new_state) {
+    const s32 new_status = StatusFromState(new_state);
+    if (new_status != NpSignaling::ORBIS_NP_SIGNALING_CONN_STATUS_PENDING) {
+        transport.handshake_start_us = 0;
+    } else if (transport.status != NpSignaling::ORBIS_NP_SIGNALING_CONN_STATUS_PENDING) {
+        transport.handshake_start_us = NpSignaling::NowUs();
+    }
     transport.state = new_state;
-    transport.status = StatusFromState(new_state);
+    transport.status = new_status;
 }
 
 s32 AllocateTransportIdLocked() {
@@ -402,8 +408,7 @@ s32 CreateTransportLocked(const OrbisNpOnlineId& local_online_id,
     transport.npid = peer_npid;
     transport.addr = addr;
     transport.port = port;
-    transport.status = NpSignaling::ORBIS_NP_SIGNALING_CONN_STATUS_PENDING;
-    transport.state = NpSignaling::ConnState::SendingOffer;
+    SetTransportStateLocked(transport, NpSignaling::ConnState::SendingOffer);
     transport.is_initiator = true;
     NpHandler::GetInstance().GetSignalingState().peer_transports[transport_id] = transport;
     return transport_id;
@@ -1219,8 +1224,9 @@ void StepPendingConnections() {
                 continue;
             }
 
-            if (transport.last_handshake_send_us != 0 &&
-                now - transport.last_handshake_send_us >
+            // Measured from the start of the handshake: every retransmit refreshes the last send.
+            if (transport.handshake_start_us != 0 &&
+                now - transport.handshake_start_us >
                     std::chrono::duration_cast<std::chrono::microseconds>(kMatching2Timeout)
                         .count()) {
                 timeout.push_back(transport_id);
